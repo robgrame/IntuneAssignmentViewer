@@ -1,0 +1,200 @@
+@page "/assignments"
+@rendermode InteractiveServer
+@inject IIntuneService IntuneService
+
+<PageTitle>Intune Assignments</PageTitle>
+
+<h2>Intune Assignment Viewer</h2>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <label class="form-label fw-semibold">Search Entra ID Group</label>
+        <div class="input-group">
+            <input type="text" class="form-control" placeholder="Enter group name..."
+                   @bind="searchTerm" @bind:event="oninput" @onkeydown="HandleKeyDown" />
+            <button class="btn btn-primary" @onclick="SearchGroups" disabled="@isSearching">
+                @if (isSearching)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                Search
+            </button>
+        </div>
+    </div>
+</div>
+
+@if (groups.Any())
+{
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <label class="form-label fw-semibold">Select Group</label>
+            <div class="list-group">
+                @foreach (var group in groups)
+                {
+                    <button class="list-group-item list-group-item-action @(selectedGroup?.Id == group.Id ? "active" : "")"
+                            @onclick="() => SelectGroup(group)">
+                        <div class="fw-semibold">@group.DisplayName</div>
+                        @if (!string.IsNullOrEmpty(group.Description))
+                        {
+                            <small class="text-muted">@group.Description</small>
+                        }
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@if (selectedGroup != null)
+{
+    <div class="row mb-3">
+        <div class="col-12">
+            <h4>Assignments for: <span class="text-primary">@selectedGroup.DisplayName</span></h4>
+        </div>
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label class="form-label fw-semibold">Filter by Policy Type</label>
+            <select class="form-select" @onchange="OnFilterChanged">
+                <option value="">All Types</option>
+                <option value="Configuration">Configuration</option>
+                <option value="Compliance">Compliance</option>
+                <option value="Application">Application</option>
+            </select>
+        </div>
+    </div>
+
+    @if (isLoadingAssignments)
+    {
+        <div class="d-flex align-items-center gap-2 my-4">
+            <div class="spinner-border text-primary" role="status"></div>
+            <span>Loading assignments...</span>
+        </div>
+    }
+    else if (filteredAssignments.Any())
+    {
+        <div class="table-responsive">
+            <table class="table table-striped table-hover">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Policy Name</th>
+                        <th>Type</th>
+                        <th>Assignment</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var assignment in filteredAssignments)
+                    {
+                        <tr>
+                            <td>@assignment.PolicyName</td>
+                            <td>
+                                <span class="badge @GetBadgeClass(assignment.PolicyType)">
+                                    @assignment.PolicyType
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge @(assignment.AssignmentIntent == "Exclude" ? "bg-danger" : "bg-success")">
+                                    @assignment.AssignmentIntent
+                                </span>
+                            </td>
+                            <td><small>@TruncateDescription(assignment.Description)</small></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <p class="text-muted">Total: @filteredAssignments.Count assignment(s)</p>
+    }
+    else
+    {
+        <div class="alert alert-info">
+            No assignments found for this group@(selectedFilter != null ? $" with type '{selectedFilter}'" : "").
+        </div>
+    }
+}
+
+@code {
+    private string searchTerm = string.Empty;
+    private List<GroupInfo> groups = new();
+    private GroupInfo? selectedGroup;
+    private List<IntuneAssignment> assignments = new();
+    private List<IntuneAssignment> filteredAssignments = new();
+    private PolicyType? selectedFilter;
+    private bool isSearching;
+    private bool isLoadingAssignments;
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SearchGroups();
+        }
+    }
+
+    private async Task SearchGroups()
+    {
+        if (string.IsNullOrWhiteSpace(searchTerm)) return;
+
+        isSearching = true;
+        selectedGroup = null;
+        assignments.Clear();
+        filteredAssignments.Clear();
+
+        try
+        {
+            groups = await IntuneService.SearchGroupsAsync(searchTerm.Trim());
+        }
+        finally
+        {
+            isSearching = false;
+        }
+    }
+
+    private async Task SelectGroup(GroupInfo group)
+    {
+        selectedGroup = group;
+        selectedFilter = null;
+        await LoadAssignments();
+    }
+
+    private async Task LoadAssignments()
+    {
+        if (selectedGroup == null) return;
+
+        isLoadingAssignments = true;
+        StateHasChanged();
+
+        try
+        {
+            assignments = await IntuneService.GetAssignmentsForGroupAsync(selectedGroup.Id, selectedFilter);
+            filteredAssignments = assignments;
+        }
+        finally
+        {
+            isLoadingAssignments = false;
+        }
+    }
+
+    private async Task OnFilterChanged(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString();
+        selectedFilter = string.IsNullOrEmpty(value) ? null : Enum.Parse<PolicyType>(value);
+        await LoadAssignments();
+    }
+
+    private static string GetBadgeClass(PolicyType type) => type switch
+    {
+        PolicyType.Configuration => "bg-info text-dark",
+        PolicyType.Compliance => "bg-warning text-dark",
+        PolicyType.Application => "bg-primary",
+        _ => "bg-secondary"
+    };
+
+    private static string TruncateDescription(string description)
+    {
+        if (string.IsNullOrEmpty(description)) return "-";
+        return description.Length > 100 ? description[..100] + "..." : description;
+    }
+}

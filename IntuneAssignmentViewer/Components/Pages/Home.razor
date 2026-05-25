@@ -1,0 +1,28 @@
+﻿@page "/"
+@inject IOptions<BrandingSettings> BrandingOptions
+
+<PageTitle>@BrandingOptions.Value.AppTitle</PageTitle>
+
+<AuthorizeView>
+    <Authorized>
+        <h1>Welcome to @BrandingOptions.Value.AppTitle</h1>
+        <p class="lead">Use the <strong>Assignments</strong> page to search for an Entra ID group and view its Intune policy assignments.</p>
+        
+        <div class="card mt-4">
+            <div class="card-body">
+                <h5 class="card-title">How to use</h5>
+                <ol>
+                    <li>Navigate to <a href="assignments">Assignments</a></li>
+                    <li>Search for an Entra ID group by name</li>
+                    <li>Select the group from the results</li>
+                    <li>Filter by policy type: Configuration, Compliance, or Application</li>
+                </ol>
+            </div>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <h1>@BrandingOptions.Value.AppTitle</h1>
+        <p>Please sign in to access this application.</p>
+        <a href="MicrosoftIdentity/Account/SignIn" class="btn btn-primary">Sign In with Microsoft</a>
+    </NotAuthorized>
+</AuthorizeView>
