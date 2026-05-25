@@ -179,7 +179,14 @@ public class IntuneService : IIntuneService
             var response = await client.GetAsync(url);
             if (!response.IsSuccessStatusCode)
             {
-                if (response.StatusCode != System.Net.HttpStatusCode.NotFound)
+                // 404 and 403 are expected for tenants without certain features (e.g. Cloud PC)
+                // or missing permissions on optional resources; log at debug not warning
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound ||
+                    response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                {
+                    _logger.LogDebug("Graph {Status} (skipped): {Url}", response.StatusCode, url);
+                }
+                else
                 {
                     var body = await response.Content.ReadAsStringAsync();
                     _logger.LogWarning("Graph request failed: {Status} {Url} - {Body}",
@@ -277,7 +284,7 @@ public class IntuneService : IIntuneService
     private async Task GetDeviceConfigurationsAsync(string groupId, List<IntuneAssignment> assignments)
     {
         await foreach (var policy in EnumerateBetaAsync(
-            "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?$top=100&$select=id,displayName,description,@odata.type"))
+            "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?$top=100&$select=id,displayName,description"))
         {
             var pid = GetStr(policy, "id");
             var intent = await FindGroupAssignmentAsync(
@@ -364,7 +371,7 @@ public class IntuneService : IIntuneService
     private async Task GetCompliancePoliciesAsync(string groupId, List<IntuneAssignment> assignments)
     {
         await foreach (var policy in EnumerateBetaAsync(
-            "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies?$top=100&$select=id,displayName,description,@odata.type"))
+            "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies?$top=100&$select=id,displayName,description"))
         {
             var pid = GetStr(policy, "id");
             var intent = await FindGroupAssignmentAsync(
@@ -390,7 +397,7 @@ public class IntuneService : IIntuneService
     private async Task GetMobileAppsAsync(string groupId, List<IntuneAssignment> assignments)
     {
         await foreach (var app in EnumerateBetaAsync(
-            "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?$top=100&$select=id,displayName,description,@odata.type,isFeatured,isAssigned&$filter=isAssigned eq true"))
+            "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?$top=100&$select=id,displayName,description,isFeatured,isAssigned&$filter=isAssigned eq true"))
         {
             // Skip built-in/featured apps (system noise)
             if (GetBool(app, "isFeatured")) continue;
@@ -456,7 +463,7 @@ public class IntuneService : IIntuneService
     private async Task GetAppConfigurationPoliciesAsync(string groupId, List<IntuneAssignment> assignments)
     {
         await foreach (var policy in EnumerateBetaAsync(
-            "https://graph.microsoft.com/beta/deviceAppManagement/mobileAppConfigurations?$top=100&$select=id,displayName,description,@odata.type"))
+            "https://graph.microsoft.com/beta/deviceAppManagement/mobileAppConfigurations?$top=100&$select=id,displayName,description"))
         {
             var pid = GetStr(policy, "id");
             var intent = await FindGroupAssignmentAsync(
