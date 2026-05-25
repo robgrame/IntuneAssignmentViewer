@@ -2,6 +2,7 @@ using Microsoft.Graph;
 using IntuneAssignmentViewer.Models;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace IntuneAssignmentViewer.Services;
 
@@ -9,12 +10,16 @@ public class IntuneService : IIntuneService
 {
     private readonly GraphServiceClient _graphClient;
     private readonly GraphResponseCache _graphCache;
+    private readonly IMemoryCache _memCache;
     private readonly ILogger<IntuneService> _logger;
     private readonly CacheOptions _cacheOpts;
     private readonly PerformanceOptions _perfOpts;
 
     private TimeSpan CatalogTtl => TimeSpan.FromMinutes(_cacheOpts.CatalogTtlMinutes);
     private TimeSpan AssignmentsTtl => TimeSpan.FromMinutes(_cacheOpts.AssignmentsTtlMinutes);
+    private TimeSpan GroupNamesTtl => TimeSpan.FromMinutes(_cacheOpts.GroupNamesTtlMinutes);
+
+    private const string GroupNameCacheKeyPrefix = "groupname:";
 
     // Endpoint Security template families found in configurationPolicies.templateReference.templateFamily
     private static readonly Dictionary<string, string> EndpointSecurityFamilies = new(StringComparer.OrdinalIgnoreCase)
@@ -30,12 +35,14 @@ public class IntuneService : IIntuneService
     public IntuneService(
         GraphServiceClient graphClient,
         GraphResponseCache graphCache,
+        IMemoryCache memCache,
         IOptions<CacheOptions> cacheOpts,
         IOptions<PerformanceOptions> perfOpts,
         ILogger<IntuneService> logger)
     {
         _graphClient = graphClient;
         _graphCache = graphCache;
+        _memCache = memCache;
         _cacheOpts = cacheOpts.Value;
         _perfOpts = perfOpts.Value;
         _logger = logger;
@@ -137,7 +144,10 @@ public class IntuneService : IIntuneService
 
     public async Task<List<IntuneAssignment>> GetAssignmentsForGroupAsync(string groupId, PolicyType? filterType = null)
     {
-        var assignments = new List<IntuneAssignment>();
+        // CRITICAL: ConcurrentBag, NOT List<T>. The Get*Async methods run in parallel
+        // via Task.WhenAll and all call .Add() on this collection. List<T> is not
+        // thread-safe and would silently corrupt or throw.
+        var assignments = new System.Collections.Concurrent.ConcurrentBag<IntuneAssignment>();
         var tasks = new List<Task>();
 
         if (filterType is null or PolicyType.Configuration)
@@ -334,7 +344,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Legacy Device Configurations ----------
 
-    private async Task GetDeviceConfigurationsAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetDeviceConfigurationsAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var policy in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?$top=100&$select=id,displayName,description"))
@@ -361,7 +371,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Settings Catalog (also handles Endpoint Security via templateReference) ----------
 
-    private async Task GetSettingsCatalogAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetSettingsCatalogAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var policy in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?$top=100"))
@@ -398,7 +408,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Administrative Templates (ADMX) ----------
 
-    private async Task GetAdministrativeTemplatesAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetAdministrativeTemplatesAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var policy in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/groupPolicyConfigurations?$top=100&$select=id,displayName,description"))
@@ -424,7 +434,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Compliance ----------
 
-    private async Task GetCompliancePoliciesAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetCompliancePoliciesAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var policy in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies?$top=100&$select=id,displayName,description"))
@@ -451,7 +461,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Mobile Apps ----------
 
-    private async Task GetMobileAppsAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetMobileAppsAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var app in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?$top=100&$select=id,displayName,description,isFeatured,isAssigned&$filter=isAssigned eq true"))
@@ -481,7 +491,7 @@ public class IntuneService : IIntuneService
 
     // ---------- App Protection Policies ----------
 
-    private async Task GetAppProtectionPoliciesAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetAppProtectionPoliciesAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var policy in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceAppManagement/managedAppPolicies?$top=100"))
@@ -519,7 +529,7 @@ public class IntuneService : IIntuneService
 
     // ---------- App Configuration Policies ----------
 
-    private async Task GetAppConfigurationPoliciesAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetAppConfigurationPoliciesAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var policy in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceAppManagement/mobileAppConfigurations?$top=100&$select=id,displayName,description"))
@@ -567,7 +577,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Endpoint Security Intents (Template-style) ----------
 
-    private async Task GetEndpointSecurityIntentsAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetEndpointSecurityIntentsAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var intent in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/intents?$top=100&$select=id,displayName,description,templateId"))
@@ -593,7 +603,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Device Management Scripts (PowerShell - Windows) ----------
 
-    private async Task GetDeviceScriptsAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetDeviceScriptsAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var script in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/deviceManagementScripts?$top=100&$select=id,displayName,description"))
@@ -619,7 +629,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Device Shell Scripts (macOS) ----------
 
-    private async Task GetShellScriptsAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetShellScriptsAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var script in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/deviceShellScripts?$top=100&$select=id,displayName,description"))
@@ -645,7 +655,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Proactive Remediations (Device Health Scripts) ----------
 
-    private async Task GetHealthScriptsAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetHealthScriptsAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var script in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/deviceHealthScripts?$top=100&$select=id,displayName,description"))
@@ -671,7 +681,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Autopilot Deployment Profiles ----------
 
-    private async Task GetAutopilotProfilesAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetAutopilotProfilesAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var p in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/windowsAutopilotDeploymentProfiles?$top=100&$select=id,displayName,description"))
@@ -697,7 +707,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Enrollment Status Page ----------
 
-    private async Task GetEnrollmentStatusPageAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetEnrollmentStatusPageAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var p in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/deviceEnrollmentConfigurations?$top=100"))
@@ -726,7 +736,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Windows 365 Cloud PC Provisioning Policies ----------
 
-    private async Task GetCloudPcProvisioningPoliciesAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetCloudPcProvisioningPoliciesAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var p in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/virtualEndpoint/provisioningPolicies?$top=100"))
@@ -753,7 +763,7 @@ public class IntuneService : IIntuneService
 
     // ---------- Windows 365 Cloud PC User Settings ----------
 
-    private async Task GetCloudPcUserSettingsAsync(string groupId, List<IntuneAssignment> assignments)
+    private async Task GetCloudPcUserSettingsAsync(string groupId, System.Collections.Concurrent.ConcurrentBag<IntuneAssignment> assignments)
     {
         await foreach (var p in EnumerateBetaAsync(
             "https://graph.microsoft.com/beta/deviceManagement/virtualEndpoint/userSettings?$top=100"))
@@ -786,9 +796,15 @@ public class IntuneService : IIntuneService
     // the Graph bearer token).
     private static readonly System.Text.RegularExpressions.Regex AllowedAssignmentsUrlPattern =
         new(@"^https://graph\.microsoft\.com/beta/" +
-            @"(deviceManagement|deviceAppManagement)/" +
-            @"[a-zA-Z]+(/virtualEndpoint/[a-zA-Z]+)?" +
-            @"[\(/]'?[0-9a-fA-F\-]+'?\)?/assignments(\?.*)?$",
+            @"(?:" +
+                // Parenthesised key form: deviceManagement/{resource}('{id}')/assignments
+                // and deviceAppManagement/{resource}('{id}')/assignments
+                @"(?:deviceManagement|deviceAppManagement)/[A-Za-z]+\('[0-9a-fA-F\-]+'\)/assignments" +
+                @"|" +
+                // Cloud PC / virtualEndpoint slash form: deviceManagement/virtualEndpoint/{resource}/{id}/assignments
+                @"deviceManagement/virtualEndpoint/[A-Za-z]+/[0-9a-fA-F\-]+/assignments" +
+            @")" +
+            @"(?:\?.*)?$",
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
     public async Task<List<PolicyAssignmentDetail>> GetPolicyAssignmentsAsync(string assignmentsUrl)
@@ -889,10 +905,22 @@ public class IntuneService : IIntuneService
     private async Task<Dictionary<string, string>> ResolveGroupNamesAsync(IEnumerable<string> groupIds)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var ids = groupIds.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (ids.Count == 0) return result;
+        var allIds = groupIds.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (allIds.Count == 0) return result;
 
-        foreach (var chunk in ids.Chunk(20))
+        // 1) Serve from per-group name cache
+        var uncached = new List<string>();
+        foreach (var id in allIds)
+        {
+            if (_memCache.TryGetValue<string>(GroupNameCacheKeyPrefix + id, out var cachedName) && cachedName != null)
+                result[id] = cachedName;
+            else
+                uncached.Add(id);
+        }
+        if (uncached.Count == 0) return result;
+
+        // 2) Resolve cache misses via Graph $batch (chunks of 20)
+        foreach (var chunk in uncached.Chunk(20))
         {
             var batchRequests = chunk.Select((id, i) => new
             {
@@ -922,7 +950,11 @@ public class IntuneService : IIntuneService
                     var id = GetStr(body, "id");
                     var name = GetStr(body, "displayName");
                     if (!string.IsNullOrEmpty(id))
-                        result[id] = string.IsNullOrEmpty(name) ? id : name;
+                    {
+                        var displayName = string.IsNullOrEmpty(name) ? id : name;
+                        result[id] = displayName;
+                        _memCache.Set(GroupNameCacheKeyPrefix + id, displayName, GroupNamesTtl);
+                    }
                 }
             }
             catch (Exception ex)
@@ -931,7 +963,8 @@ public class IntuneService : IIntuneService
             }
         }
 
-        foreach (var id in ids.Where(i => !result.ContainsKey(i)))
+        // 3) Fallback for any IDs that didn't resolve (deleted groups, denied access, etc.)
+        foreach (var id in allIds.Where(i => !result.ContainsKey(i)))
             result[id] = "(unknown / deleted)";
 
         return result;

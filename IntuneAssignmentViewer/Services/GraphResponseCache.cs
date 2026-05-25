@@ -159,11 +159,20 @@ public sealed class GraphResponseCache : IDisposable
                 var originalUrl = urls[idx - 1];
 
                 var status = r.TryGetProperty("status", out var st) ? st.GetInt32() : 0;
+
+                // Never cache transient/throttling failures. The next access will retry.
+                if (status == 429 || status == 503 || status >= 500)
+                {
+                    _logger.LogDebug("Skipping cache for batch sub-status {Status}: {Url}", status, originalUrl);
+                    continue;
+                }
+
                 JsonElement? body = null;
                 if (status == 200 && r.TryGetProperty("body", out var b))
                 {
                     body = b.Clone();
                 }
+                // status 200 -> normal TTL; 403/404 -> negative TTL to avoid hammering
                 var ttlToUse = body == null ? TimeSpan.FromMinutes(_cacheOpts.NegativeTtlMinutes) : ttl;
                 _cache.Set(originalUrl, body, ttlToUse);
             }
@@ -211,6 +220,8 @@ public sealed class GraphResponseCache : IDisposable
         const int maxAttempts = 3;
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
+            TimeSpan? retryDelay = null;
+
             await _concurrencyLimiter.WaitAsync();
             HttpResponseMessage? response = null;
             try
@@ -221,18 +232,15 @@ public sealed class GraphResponseCache : IDisposable
                 if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
                     (int)response.StatusCode == 503)
                 {
-                    var delay = response.Headers.RetryAfter?.Delta
-                        ?? TimeSpan.FromSeconds(Math.Pow(2, attempt));
                     if (attempt < maxAttempts)
                     {
+                        retryDelay = response.Headers.RetryAfter?.Delta
+                            ?? TimeSpan.FromSeconds(Math.Pow(2, attempt));
                         _logger.LogInformation("Throttled ({Status}), retry in {Delay}s: {Url}",
-                            (int)response.StatusCode, delay.TotalSeconds, url);
-                        await Task.Delay(delay);
-                        continue;
+                            (int)response.StatusCode, retryDelay.Value.TotalSeconds, url);
                     }
                 }
-
-                if (!response.IsSuccessStatusCode)
+                else if (!response.IsSuccessStatusCode)
                 {
                     if (response.StatusCode == System.Net.HttpStatusCode.NotFound ||
                         response.StatusCode == System.Net.HttpStatusCode.Forbidden)
@@ -247,9 +255,12 @@ public sealed class GraphResponseCache : IDisposable
                     }
                     return null;
                 }
-                await using var stream = await response.Content.ReadAsStreamAsync();
-                using var doc = await JsonDocument.ParseAsync(stream);
-                return doc.RootElement.Clone();
+                else
+                {
+                    await using var stream = await response.Content.ReadAsStreamAsync();
+                    using var doc = await JsonDocument.ParseAsync(stream);
+                    return doc.RootElement.Clone();
+                }
             }
             catch (Exception ex)
             {
@@ -259,8 +270,18 @@ public sealed class GraphResponseCache : IDisposable
             finally
             {
                 response?.Dispose();
+                // Release the global concurrency permit BEFORE sleeping for retry,
+                // otherwise we deadlock under load (10 throttled requests holding
+                // all permits while sleeping their backoff).
                 _concurrencyLimiter.Release();
             }
+
+            if (retryDelay.HasValue)
+            {
+                await Task.Delay(retryDelay.Value);
+                continue;
+            }
+            break;
         }
         return null;
     }
