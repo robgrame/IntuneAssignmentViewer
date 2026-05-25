@@ -1,6 +1,8 @@
 @page "/assignments"
 @rendermode InteractiveServer
 @inject IIntuneService IntuneService
+@inject IConfiguration Configuration
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "RequireIntuneRole")]
 
 <PageTitle>Intune Assignments</PageTitle>
 

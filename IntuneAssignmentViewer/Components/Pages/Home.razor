@@ -1,24 +1,42 @@
 ﻿@page "/"
 @inject IOptions<BrandingSettings> BrandingOptions
+@inject IConfiguration Configuration
 
 <PageTitle>@BrandingOptions.Value.AppTitle</PageTitle>
 
 <AuthorizeView>
     <Authorized>
-        <h1>Welcome to @BrandingOptions.Value.AppTitle</h1>
-        <p class="lead">Use the <strong>Assignments</strong> page to search for an Entra ID group and view its Intune policy assignments.</p>
-        
-        <div class="card mt-4">
-            <div class="card-body">
-                <h5 class="card-title">How to use</h5>
-                <ol>
-                    <li>Navigate to <a href="assignments">Assignments</a></li>
-                    <li>Search for an Entra ID group by name</li>
-                    <li>Select the group from the results</li>
-                    <li>Filter by policy type: Configuration, Compliance, or Application</li>
-                </ol>
+        @{
+            var requiredRole = Configuration.GetValue<string>("Authorization:RequiredRole") ?? "IntuneReader";
+            var hasRole = context.User.IsInRole(requiredRole);
+        }
+        @if (hasRole)
+        {
+            <h1>Welcome to @BrandingOptions.Value.AppTitle</h1>
+            <p class="lead">Use the <strong>Assignments</strong> page to search for an Entra ID group and view its Intune policy assignments.</p>
+            
+            <div class="card mt-4">
+                <div class="card-body">
+                    <h5 class="card-title">How to use</h5>
+                    <ol>
+                        <li>Navigate to <a href="assignments">Assignments</a></li>
+                        <li>Search for an Entra ID group by name</li>
+                        <li>Select the group from the results</li>
+                        <li>Filter by policy type: Configuration, Compliance, or Application</li>
+                    </ol>
+                </div>
             </div>
-        </div>
+        }
+        else
+        {
+            <div class="alert alert-danger mt-4">
+                <h4 class="alert-heading">Access Denied</h4>
+                <p>You are authenticated as <strong>@context.User.Identity?.Name</strong>, but you do not have the required role (<code>@requiredRole</code>) to access this application.</p>
+                <hr />
+                <p class="mb-0">Please contact your administrator to be assigned the correct role.</p>
+            </div>
+            <a href="MicrosoftIdentity/Account/SignOut" class="btn btn-outline-secondary mt-3">Sign Out</a>
+        }
     </Authorized>
     <NotAuthorized>
         <h1>@BrandingOptions.Value.AppTitle</h1>

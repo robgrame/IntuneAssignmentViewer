@@ -21,9 +21,9 @@ builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("RequireIntuneRole", policy =>
         policy.RequireRole(requiredRole));
+    // FallbackPolicy only requires authentication - role check is done in pages
     options.FallbackPolicy = new AuthorizationPolicyBuilder()
         .RequireAuthenticatedUser()
-        .RequireRole(requiredRole)
         .Build();
 });
 
