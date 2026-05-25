@@ -102,12 +102,114 @@
                 <span>Loading assignments...</span>
             </div>
         }
-        else if (filteredAssignments.Any())
+        else if (assignments.Any())
         {
-            @if (viewMode == ViewMode.Cards)
+            <!-- ===== Summary dashboard ===== -->
+            <div class="summary-section mb-4">
+                <div class="summary-grid">
+                    <div class="summary-card summary-total">
+                        <div class="summary-total-value">@assignments.Count</div>
+                        <div class="summary-total-label">Total Assignments</div>
+                    </div>
+
+                    <div class="summary-card">
+                        <h6 class="summary-title">By Policy Type</h6>
+                        @{
+                            var byType = assignments.GroupBy(a => a.PolicyType)
+                                .Select(g => new { Type = g.Key, Count = g.Count() })
+                                .OrderByDescending(x => x.Count)
+                                .ToList();
+                            var maxTypeCount = byType.Max(x => x.Count);
+                        }
+                        <div class="bar-chart">
+                            @foreach (var item in byType)
+                            {
+                                <div class="bar-row" @onclick="() => SetFilter(item.Type)" role="button">
+                                    <div class="bar-label">
+                                        <span>@GetPolicyIcon(item.Type)</span>
+                                        <span>@GetPolicyLabel(item.Type)</span>
+                                    </div>
+                                    <div class="bar-track">
+                                        <div class="bar-fill @GetBarColorClass(item.Type)"
+                                             style="width: @((item.Count * 100 / maxTypeCount))%"></div>
+                                    </div>
+                                    <div class="bar-value">@item.Count</div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="summary-card">
+                        <h6 class="summary-title">By Platform</h6>
+                        @{
+                            var byPlatform = assignments
+                                .Select(a => string.IsNullOrEmpty(a.Platform) ? "Cross-platform" : a.Platform)
+                                .GroupBy(p => p)
+                                .Select(g => new { Platform = g.Key, Count = g.Count() })
+                                .OrderByDescending(x => x.Count)
+                                .ToList();
+                        }
+                        <div class="donut-wrapper">
+                            <svg viewBox="0 0 42 42" class="donut">
+                                <circle class="donut-hole" cx="21" cy="21" r="15.91549430918954"></circle>
+                                @{
+                                    double offset = 25;
+                                    var total = byPlatform.Sum(x => x.Count);
+                                    int idx = 0;
+                                    var palette = new[] { "#0078d4", "#5c2d91", "#107c10", "#ff8c00", "#e3008c", "#888" };
+                                }
+                                @foreach (var item in byPlatform)
+                                {
+                                    var pct = total == 0 ? 0 : (item.Count * 100.0 / total);
+                                    var color = palette[idx % palette.Length];
+                                    var dash = $"{pct.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)} {(100 - pct).ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}";
+                                    var dashOffset = offset.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+                                    <circle class="donut-segment"
+                                            cx="21" cy="21" r="15.91549430918954"
+                                            stroke="@color"
+                                            stroke-dasharray="@dash"
+                                            stroke-dashoffset="@dashOffset"></circle>
+                                    offset = (offset - pct + 100) % 100;
+                                    idx++;
+                                }
+                            </svg>
+                            <div class="donut-legend">
+                                @{ idx = 0; }
+                                @foreach (var item in byPlatform)
+                                {
+                                    var color = palette[idx % palette.Length];
+                                    <div class="legend-item @(selectedPlatform == item.Platform ? "active" : "")"
+                                         @onclick="() => TogglePlatformFilter(item.Platform)" role="button">
+                                        <span class="legend-dot" style="background:@color"></span>
+                                        <span>@GetPlatformIcon(item.Platform) @item.Platform</span>
+                                        <span class="legend-count">@item.Count</span>
+                                    </div>
+                                    idx++;
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== OS filter chips ===== -->
+            <div class="os-filter mb-3">
+                <span class="os-filter-label">Filter by OS:</span>
+                <button class="os-chip @(selectedPlatform == null ? "active" : "")" @onclick="() => SetPlatformFilter(null)">All OS</button>
+                @foreach (var os in availablePlatforms)
+                {
+                    <button class="os-chip @(selectedPlatform == os ? "active" : "")" @onclick="() => SetPlatformFilter(os)">
+                        @GetPlatformIcon(os) @os
+                    </button>
+                }
+            </div>
+
+            @if (filteredAssignments.Any())
             {
-                <div class="assignments-grid">
-                    @foreach (var assignment in filteredAssignments)
+                @if (viewMode == ViewMode.Cards)
+                {
+                    <div class="assignments-grid">
+                        @foreach (var assignment in filteredAssignments)
                     {
                         <div class="assignment-card">
                             <div class="assignment-card-header">
@@ -179,13 +281,22 @@
                     </table>
                 </div>
             }
-            <p class="text-muted mt-3">Total: @filteredAssignments.Count assignment(s)</p>
+                <p class="text-muted mt-3">Showing @filteredAssignments.Count of @assignments.Count assignment(s)</p>
+            }
+            else
+            {
+                <div class="empty-state">
+                    <span class="empty-icon">🔍</span>
+                    <p>No assignments match the current filters.</p>
+                    <button class="btn btn-outline-primary btn-sm" @onclick="ClearAllFilters">Clear filters</button>
+                </div>
+            }
         }
         else
         {
             <div class="empty-state">
                 <span class="empty-icon">📭</span>
-                <p>No assignments found for this group@(selectedFilter != null ? $" with type '{GetPolicyLabel(selectedFilter.Value)}'" : "").</p>
+                <p>No assignments found for this group.</p>
             </div>
         }
     }
@@ -200,6 +311,8 @@
     private List<IntuneAssignment> assignments = new();
     private List<IntuneAssignment> filteredAssignments = new();
     private PolicyType? selectedFilter;
+    private string? selectedPlatform;
+    private List<string> availablePlatforms = new();
     private ViewMode viewMode = ViewMode.Cards;
     private bool isSearching;
     private bool isLoadingAssignments;
@@ -270,24 +383,49 @@
         selectedGroup = null;
         assignments.Clear();
         filteredAssignments.Clear();
+        availablePlatforms.Clear();
         selectedFilter = null;
+        selectedPlatform = null;
         searchTerm = string.Empty;
     }
 
-    private async Task SetFilter(PolicyType? filter)
+    private void ClearAllFilters()
+    {
+        selectedFilter = null;
+        selectedPlatform = null;
+        ApplyFilters();
+    }
+
+    private void SetFilter(PolicyType? filter)
     {
         selectedFilter = filter;
-        // Load full set once, then filter client-side; or re-query for performance
-        if (assignments.Count == 0)
+        ApplyFilters();
+    }
+
+    private void SetPlatformFilter(string? platform)
+    {
+        selectedPlatform = platform;
+        ApplyFilters();
+    }
+
+    private void TogglePlatformFilter(string platform)
+    {
+        selectedPlatform = (selectedPlatform == platform) ? null : platform;
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        IEnumerable<IntuneAssignment> q = assignments;
+        if (selectedFilter != null)
+            q = q.Where(a => a.PolicyType == selectedFilter);
+        if (!string.IsNullOrEmpty(selectedPlatform))
         {
-            await LoadAssignments();
+            q = (selectedPlatform == "Cross-platform")
+                ? q.Where(a => string.IsNullOrEmpty(a.Platform))
+                : q.Where(a => a.Platform == selectedPlatform);
         }
-        else
-        {
-            filteredAssignments = filter == null
-                ? assignments
-                : assignments.Where(a => a.PolicyType == filter).ToList();
-        }
+        filteredAssignments = q.ToList();
     }
 
     private async Task LoadAssignments()
@@ -297,11 +435,13 @@
         StateHasChanged();
         try
         {
-            // Always fetch ALL types once, then filter client-side
             assignments = await IntuneService.GetAssignmentsForGroupAsync(selectedGroup.Id, null);
-            filteredAssignments = selectedFilter == null
-                ? assignments
-                : assignments.Where(a => a.PolicyType == selectedFilter).ToList();
+            availablePlatforms = assignments
+                .Select(a => string.IsNullOrEmpty(a.Platform) ? "Cross-platform" : a.Platform)
+                .Distinct()
+                .OrderBy(p => p)
+                .ToList();
+            ApplyFilters();
         }
         finally
         {
@@ -346,13 +486,29 @@
         _ => "bg-secondary"
     };
 
+    private static string GetBarColorClass(PolicyType type) => type switch
+    {
+        PolicyType.Configuration => "bar-blue",
+        PolicyType.AdministrativeTemplate => "bar-gray",
+        PolicyType.Compliance => "bar-orange",
+        PolicyType.Application => "bar-indigo",
+        PolicyType.AppProtection => "bar-red",
+        PolicyType.AppConfiguration => "bar-green",
+        PolicyType.EndpointSecurity => "bar-dark",
+        PolicyType.Script => "bar-teal",
+        PolicyType.Provisioning => "bar-purple",
+        _ => "bar-gray"
+    };
+
     private static string GetPlatformIcon(string platform) => platform.ToLowerInvariant() switch
     {
+        var s when s.Contains("windows 365") => "☁️",
         var s when s.Contains("windows") => "🪟",
         "ios" => "🍎",
         "macos" => "🖥️",
         "android" => "🤖",
-        _ => ""
+        "cross-platform" => "🌐",
+        _ => "📱"
     };
 
     private static string GetIntentIcon(string intent) => intent.ToLowerInvariant() switch

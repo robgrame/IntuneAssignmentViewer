@@ -251,3 +251,237 @@
     background-color: #6f42c1 !important;
     color: white;
 }
+
+/* ===== Summary section ===== */
+.summary-section {
+    margin-bottom: 1.5rem;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: minmax(180px, 0.6fr) 2fr 1.4fr;
+    gap: 1rem;
+}
+
+@media (max-width: 980px) {
+    .summary-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.summary-card {
+    background: white;
+    border-radius: 12px;
+    padding: 1.25rem;
+    border: 1px solid #e8e8e8;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+
+.summary-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 1rem;
+}
+
+.summary-total {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #0078d4, #5c2d91);
+    color: white;
+    border: none;
+}
+
+.summary-total-value {
+    font-size: 3rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.summary-total-label {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 0.5rem;
+    opacity: 0.9;
+}
+
+/* Bar chart */
+.bar-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.bar-row {
+    display: grid;
+    grid-template-columns: 150px 1fr 40px;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    padding: 0.2rem 0.3rem;
+    border-radius: 4px;
+    transition: background 0.15s;
+}
+
+.bar-row:hover {
+    background: #f5f7fa;
+}
+
+.bar-label {
+    font-size: 0.8rem;
+    color: #333;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bar-track {
+    background: #f0f0f0;
+    height: 14px;
+    border-radius: 7px;
+    overflow: hidden;
+}
+
+.bar-fill {
+    height: 100%;
+    border-radius: 7px;
+    transition: width 0.5s ease;
+}
+
+.bar-value {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #333;
+    text-align: right;
+}
+
+.bar-blue   { background: linear-gradient(90deg, #0078d4, #2b88d8); }
+.bar-purple { background: linear-gradient(90deg, #5c2d91, #8a4dc7); }
+.bar-green  { background: linear-gradient(90deg, #107c10, #2dba2d); }
+.bar-orange { background: linear-gradient(90deg, #ff8c00, #ffb845); }
+.bar-red    { background: linear-gradient(90deg, #d83b01, #f15a3a); }
+.bar-dark   { background: linear-gradient(90deg, #2d2d2d, #555); }
+.bar-teal   { background: linear-gradient(90deg, #038387, #00b7c3); }
+.bar-indigo { background: linear-gradient(90deg, #4f46e5, #818cf8); }
+.bar-gray   { background: linear-gradient(90deg, #6c757d, #a8b3bd); }
+
+/* Donut chart */
+.donut-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.donut {
+    width: 130px;
+    height: 130px;
+    transform: rotate(-90deg);
+    flex-shrink: 0;
+}
+
+.donut-hole {
+    fill: white;
+}
+
+.donut-segment {
+    fill: transparent;
+    stroke-width: 4;
+    transition: stroke-width 0.2s;
+}
+
+.donut-segment:hover {
+    stroke-width: 5;
+}
+
+.donut-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    flex: 1;
+    min-width: 0;
+}
+
+.legend-item {
+    display: grid;
+    grid-template-columns: 12px 1fr auto;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.4rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: background 0.15s;
+}
+
+.legend-item:hover {
+    background: #f5f7fa;
+}
+
+.legend-item.active {
+    background: #e7f3ff;
+    font-weight: 600;
+}
+
+.legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.legend-count {
+    font-weight: 600;
+    color: #555;
+    font-size: 0.8rem;
+}
+
+/* OS filter chips */
+.os-filter {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    background: white;
+    padding: 0.75rem 1rem;
+    border-radius: 10px;
+    border: 1px solid #e8e8e8;
+}
+
+.os-filter-label {
+    font-size: 0.85rem;
+    color: #666;
+    font-weight: 500;
+    margin-right: 0.25rem;
+}
+
+.os-chip {
+    padding: 0.3rem 0.85rem;
+    border-radius: 16px;
+    border: 1.5px solid #e0e0e0;
+    background: white;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 500;
+    transition: all 0.15s;
+}
+
+.os-chip:hover {
+    border-color: #0078d4;
+    background: #f0f7ff;
+}
+
+.os-chip.active {
+    border-color: #0078d4;
+    background: #0078d4;
+    color: white;
+}
+
+

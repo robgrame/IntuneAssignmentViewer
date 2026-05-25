@@ -47,30 +47,36 @@ builder.Services.AddControllersWithViews()
     .AddMicrosoftIdentityUI();
 
 // Microsoft Graph client - supports both Managed Identity (Azure) and Client Secret (on-prem)
-builder.Services.AddSingleton(sp =>
+builder.Services.AddSingleton<Azure.Core.TokenCredential>(sp =>
 {
     var graphConfig = builder.Configuration.GetSection("Graph");
     var tenantId = graphConfig.GetValue<string>("TenantId") ?? builder.Configuration.GetValue<string>("AzureAd:TenantId");
     var clientId = graphConfig.GetValue<string>("ClientId");
     var clientSecret = graphConfig.GetValue<string>("ClientSecret");
 
-    Azure.Core.TokenCredential credential;
-
     // If explicit Graph client credentials are provided (on-prem scenario), use ClientSecretCredential
     if (!string.IsNullOrEmpty(clientId) && !string.IsNullOrEmpty(clientSecret) && !string.IsNullOrEmpty(tenantId))
     {
-        credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+        return new ClientSecretCredential(tenantId, clientId, clientSecret);
     }
-    else
-    {
-        // Cloud scenario: chain Managed Identity (Azure) -> AzureCli/VS (dev fallback)
-        credential = new ChainedTokenCredential(
-            new ManagedIdentityCredential(new ManagedIdentityCredentialOptions()),
-            new AzureCliCredential(),
-            new VisualStudioCredential());
-    }
+    // Cloud scenario: chain Managed Identity (Azure) -> AzureCli/VS (dev fallback)
+    return new ChainedTokenCredential(
+        new ManagedIdentityCredential(new ManagedIdentityCredentialOptions()),
+        new AzureCliCredential(),
+        new VisualStudioCredential());
+});
 
+builder.Services.AddSingleton(sp =>
+{
+    var credential = sp.GetRequiredService<Azure.Core.TokenCredential>();
     return new GraphServiceClient(credential, new[] { "https://graph.microsoft.com/.default" });
+});
+
+// Dedicated HttpClient for raw Graph beta calls (avoids Kiota URL templating issues)
+builder.Services.AddHttpClient("GraphBeta", c =>
+{
+    c.BaseAddress = new Uri("https://graph.microsoft.com/");
+    c.Timeout = TimeSpan.FromMinutes(2);
 });
 
 // Branding configuration

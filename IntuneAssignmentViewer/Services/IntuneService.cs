@@ -1,14 +1,20 @@
 using Microsoft.Graph;
-using Microsoft.Kiota.Abstractions;
 using IntuneAssignmentViewer.Models;
 using System.Text.Json;
+using Azure.Core;
+using System.Net.Http.Headers;
 
 namespace IntuneAssignmentViewer.Services;
 
 public class IntuneService : IIntuneService
 {
     private readonly GraphServiceClient _graphClient;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly TokenCredential _credential;
     private readonly ILogger<IntuneService> _logger;
+    private string? _cachedToken;
+    private DateTimeOffset _tokenExpiresOn;
+    private readonly SemaphoreSlim _tokenLock = new(1, 1);
 
     // Endpoint Security template families found in configurationPolicies.templateReference.templateFamily
     private static readonly Dictionary<string, string> EndpointSecurityFamilies = new(StringComparer.OrdinalIgnoreCase)
@@ -21,10 +27,48 @@ public class IntuneService : IIntuneService
         { "endpointSecurityAccountProtection", "Account Protection" }
     };
 
-    public IntuneService(GraphServiceClient graphClient, ILogger<IntuneService> logger)
+    public IntuneService(
+        GraphServiceClient graphClient,
+        IHttpClientFactory httpClientFactory,
+        TokenCredential credential,
+        ILogger<IntuneService> logger)
     {
         _graphClient = graphClient;
+        _httpClientFactory = httpClientFactory;
+        _credential = credential;
         _logger = logger;
+    }
+
+    private async Task<string> GetTokenAsync()
+    {
+        // Refresh if expired or expires within 5 minutes
+        if (_cachedToken != null && DateTimeOffset.UtcNow < _tokenExpiresOn.AddMinutes(-5))
+            return _cachedToken;
+
+        await _tokenLock.WaitAsync();
+        try
+        {
+            if (_cachedToken != null && DateTimeOffset.UtcNow < _tokenExpiresOn.AddMinutes(-5))
+                return _cachedToken;
+
+            var ctx = new TokenRequestContext(new[] { "https://graph.microsoft.com/.default" });
+            var accessToken = await _credential.GetTokenAsync(ctx, CancellationToken.None);
+            _cachedToken = accessToken.Token;
+            _tokenExpiresOn = accessToken.ExpiresOn;
+            return _cachedToken;
+        }
+        finally
+        {
+            _tokenLock.Release();
+        }
+    }
+
+    private async Task<HttpClient> GetClientAsync()
+    {
+        var client = _httpClientFactory.CreateClient("GraphBeta");
+        var token = await GetTokenAsync();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
     }
 
     public async Task<List<GroupInfo>> SearchGroupsAsync(string searchTerm)
@@ -114,30 +158,16 @@ public class IntuneService : IIntuneService
         var nextUrl = initialUrl;
         while (!string.IsNullOrEmpty(nextUrl))
         {
-            Stream? response;
-            try
-            {
-                var reqInfo = new RequestInformation { HttpMethod = Method.GET, URI = new Uri(nextUrl) };
-                response = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(reqInfo);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Error fetching: {Url}", nextUrl);
-                yield break;
-            }
+            JsonElement? root = await GetBetaAsync(nextUrl);
+            if (root == null) yield break;
 
-            if (response == null) yield break;
-
-            using var doc = await JsonDocument.ParseAsync(response);
-            var root = doc.RootElement;
-
-            if (root.TryGetProperty("value", out var arr))
+            if (root.Value.TryGetProperty("value", out var arr))
             {
                 foreach (var item in arr.EnumerateArray())
                     yield return item.Clone();
             }
 
-            nextUrl = root.TryGetProperty("@odata.nextLink", out var nl) ? nl.GetString() : null;
+            nextUrl = root.Value.TryGetProperty("@odata.nextLink", out var nl) ? nl.GetString() : null;
         }
     }
 
@@ -145,10 +175,20 @@ public class IntuneService : IIntuneService
     {
         try
         {
-            var reqInfo = new RequestInformation { HttpMethod = Method.GET, URI = new Uri(url) };
-            var response = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(reqInfo);
-            if (response == null) return null;
-            using var doc = await JsonDocument.ParseAsync(response);
+            var client = await GetClientAsync();
+            var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+            {
+                if (response.StatusCode != System.Net.HttpStatusCode.NotFound)
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    _logger.LogWarning("Graph request failed: {Status} {Url} - {Body}",
+                        response.StatusCode, url, body.Length > 500 ? body[..500] : body);
+                }
+                return null;
+            }
+            await using var stream = await response.Content.ReadAsStreamAsync();
+            using var doc = await JsonDocument.ParseAsync(stream);
             return doc.RootElement.Clone();
         }
         catch (Exception ex)
