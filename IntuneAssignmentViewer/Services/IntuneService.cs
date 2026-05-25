@@ -117,7 +117,7 @@ public class IntuneService : IIntuneService
             Stream? response;
             try
             {
-                var reqInfo = new RequestInformation { HttpMethod = Method.GET, UrlTemplate = nextUrl };
+                var reqInfo = new RequestInformation { HttpMethod = Method.GET, URI = new Uri(nextUrl) };
                 response = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(reqInfo);
             }
             catch (Exception ex)
@@ -145,7 +145,7 @@ public class IntuneService : IIntuneService
     {
         try
         {
-            var reqInfo = new RequestInformation { HttpMethod = Method.GET, UrlTemplate = url };
+            var reqInfo = new RequestInformation { HttpMethod = Method.GET, URI = new Uri(url) };
             var response = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(reqInfo);
             if (response == null) return null;
             using var doc = await JsonDocument.ParseAsync(response);

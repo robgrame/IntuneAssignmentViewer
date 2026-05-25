@@ -131,7 +131,7 @@
                             }
                             <div class="assignment-footer">
                                 <span class="badge @GetIntentBadgeClass(assignment.AssignmentIntent)">
-                                    @GetIntentIcon(assignment.AssignmentIntent) @assignment.AssignmentIntent
+                                    @GetIntentIcon(assignment.AssignmentIntent) @GetIntentLabel(assignment.AssignmentIntent)
                                 </span>
                             </div>
                         </div>
@@ -169,7 +169,7 @@
                                     </td>
                                     <td>
                                         <span class="badge @GetIntentBadgeClass(a.AssignmentIntent)">
-                                            @GetIntentIcon(a.AssignmentIntent) @a.AssignmentIntent
+                                            @GetIntentIcon(a.AssignmentIntent) @GetIntentLabel(a.AssignmentIntent)
                                         </span>
                                     </td>
                                     <td><small class="text-muted">@TruncateDescription(a.Description, 80)</small></td>
@@ -357,16 +357,25 @@
 
     private static string GetIntentIcon(string intent) => intent.ToLowerInvariant() switch
     {
-        "exclude" => "⛔",
+        "exclude" or "excluded" => "⛔",
         "uninstall" => "🗑️",
         "available" => "📥",
         "required" => "📌",
         _ => "✓"
     };
 
+    private static string GetIntentLabel(string intent) => intent.ToLowerInvariant() switch
+    {
+        // For policies (configurations, compliance, scripts, etc.) "include" means the group
+        // is targeted to receive the policy. Use "Assigned" for clarity.
+        "include" => "Assigned",
+        "exclude" => "Excluded",
+        _ => intent
+    };
+
     private static string GetIntentBadgeClass(string intent) => intent.ToLowerInvariant() switch
     {
-        "exclude" => "bg-danger",
+        "exclude" or "excluded" => "bg-danger",
         "uninstall" => "bg-warning text-dark",
         "available" => "bg-info text-dark",
         "required" => "bg-primary",
