@@ -48,7 +48,7 @@ public class IntuneService : IIntuneService
         _logger = logger;
     }
 
-    public void InvalidateCache() => _graphCache.InvalidateAll();
+    public void InvalidateCache() => _graphCache.InvalidateAssignments();
 
     /// <summary>
     /// Pre-warm the cache by enumerating every catalog endpoint and batch-fetching
@@ -94,23 +94,84 @@ public class IntuneService : IIntuneService
 
         foreach (var (catalogUrl, assignBuilder) in categories)
         {
-            if (ct.IsCancellationRequested) break;
+            ct.ThrowIfCancellationRequested();
             try
             {
-                var policies = await EnumerateAndPreFetchAsync(catalogUrl, assignBuilder);
+                var policies = await EnumerateAndPreFetchAsync(catalogUrl, assignBuilder, ct);
                 totalPolicies += policies.Count;
                 categoriesProcessed++;
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Warmup error on {Url}", catalogUrl);
             }
         }
 
+        // App Protection policies need @odata.type-based resource path resolution
+        try
+        {
+            await WarmupAppProtectionAsync(ct);
+            categoriesProcessed++;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { _logger.LogWarning(ex, "Warmup error on App Protection"); }
+
+        // Cloud PC (virtualEndpoint) — silently noop on tenants without licence (403)
+        foreach (var cp in new[]
+        {
+            ("https://graph.microsoft.com/beta/deviceManagement/virtualEndpoint/provisioningPolicies?$top=100&$select=id",
+                (Func<string, string>)(id => $"https://graph.microsoft.com/beta/deviceManagement/virtualEndpoint/provisioningPolicies/{id}/assignments")),
+            ("https://graph.microsoft.com/beta/deviceManagement/virtualEndpoint/userSettings?$top=100&$select=id",
+                (Func<string, string>)(id => $"https://graph.microsoft.com/beta/deviceManagement/virtualEndpoint/userSettings/{id}/assignments")),
+        })
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var policies = await EnumerateAndPreFetchAsync(cp.Item1, cp.Item2, ct);
+                totalPolicies += policies.Count;
+                categoriesProcessed++;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { _logger.LogWarning(ex, "Warmup error on {Url}", cp.Item1); }
+        }
+
         sw.Stop();
         _logger.LogInformation(
             "Warmup completed: {Cats} categories, {Total} policies, {Elapsed} ms",
             categoriesProcessed, totalPolicies, sw.ElapsedMilliseconds);
+    }
+
+    /// <summary>
+    /// App Protection requires fetching managedAppPolicies first, mapping each
+    /// @odata.type to the specific resource path (iosManagedAppProtections, etc.),
+    /// then batch-prefetching all assignments.
+    /// </summary>
+    private async Task WarmupAppProtectionAsync(CancellationToken ct)
+    {
+        var assignmentUrls = new List<string>();
+        await foreach (var policy in EnumerateBetaAsync("https://graph.microsoft.com/beta/deviceAppManagement/managedAppPolicies?$top=100"))
+        {
+            ct.ThrowIfCancellationRequested();
+            var pid = GetStr(policy, "id");
+            var odata = GetStr(policy, "@odata.type");
+            string? resourcePath = odata switch
+            {
+                _ when odata.Contains("iosManagedAppProtection") => "iosManagedAppProtections",
+                _ when odata.Contains("androidManagedAppProtection") => "androidManagedAppProtections",
+                _ when odata.Contains("windowsManagedAppProtection") => "windowsManagedAppProtections",
+                _ when odata.Contains("mdmWindowsInformationProtection") => "mdmWindowsInformationProtectionPolicies",
+                _ when odata.Contains("windowsInformationProtection") => "windowsInformationProtectionPolicies",
+                _ => null
+            };
+            if (resourcePath != null && !string.IsNullOrEmpty(pid))
+            {
+                assignmentUrls.Add($"https://graph.microsoft.com/beta/deviceAppManagement/{resourcePath}('{pid}')/assignments");
+            }
+        }
+        if (_perfOpts.EnableBatchRequests && assignmentUrls.Count > 0)
+            await _graphCache.PreFetchBatchAsync(assignmentUrls, AssignmentsTtl, ct);
     }
 
     public async Task<List<GroupInfo>> SearchGroupsAsync(string searchTerm)
@@ -229,11 +290,17 @@ public class IntuneService : IIntuneService
     /// per-item /assignments URLs via Graph $batch (if enabled). Returns the policy
     /// list ready for iteration; subsequent FindGroupAssignmentAsync calls hit the cache.
     /// </summary>
-    private async Task<List<JsonElement>> EnumerateAndPreFetchAsync(string catalogUrl, Func<string, string> assignmentsUrlBuilder)
+    private async Task<List<JsonElement>> EnumerateAndPreFetchAsync(
+        string catalogUrl,
+        Func<string, string> assignmentsUrlBuilder,
+        CancellationToken ct = default)
     {
         var policies = new List<JsonElement>();
         await foreach (var p in EnumerateBetaAsync(catalogUrl))
+        {
+            ct.ThrowIfCancellationRequested();
             policies.Add(p);
+        }
 
         if (_perfOpts.EnableBatchRequests && policies.Count > 0)
         {
@@ -241,7 +308,7 @@ public class IntuneService : IIntuneService
                 .Select(p => assignmentsUrlBuilder(GetStr(p, "id")))
                 .Where(u => !string.IsNullOrEmpty(u))
                 .ToList();
-            await _graphCache.PreFetchBatchAsync(urls, AssignmentsTtl);
+            await _graphCache.PreFetchBatchAsync(urls, AssignmentsTtl, ct);
         }
 
         return policies;

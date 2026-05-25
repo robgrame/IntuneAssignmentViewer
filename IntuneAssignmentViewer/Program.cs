@@ -54,16 +54,25 @@ builder.Services.AddSingleton<Azure.Core.TokenCredential>(sp =>
     var clientId = graphConfig.GetValue<string>("ClientId");
     var clientSecret = graphConfig.GetValue<string>("ClientSecret");
 
-    // If explicit Graph client credentials are provided (on-prem scenario), use ClientSecretCredential
+    // 1) Explicit client credentials always win (on-prem or hybrid scenario)
     if (!string.IsNullOrEmpty(clientId) && !string.IsNullOrEmpty(clientSecret) && !string.IsNullOrEmpty(tenantId))
     {
         return new ClientSecretCredential(tenantId, clientId, clientSecret);
     }
-    // Cloud scenario: chain Managed Identity (Azure) -> AzureCli/VS (dev fallback)
-    return new ChainedTokenCredential(
-        new ManagedIdentityCredential(new ManagedIdentityCredentialOptions()),
-        new AzureCliCredential(),
-        new VisualStudioCredential());
+
+    // 2) Development: allow CLI / Visual Studio fallback for local dev convenience
+    if (builder.Environment.IsDevelopment())
+    {
+        return new ChainedTokenCredential(
+            new ManagedIdentityCredential(new ManagedIdentityCredentialOptions()),
+            new AzureCliCredential(),
+            new VisualStudioCredential());
+    }
+
+    // 3) Production (Azure): require Managed Identity. No silent CLI/VS fallback so
+    //    configuration errors fail loudly instead of accidentally using a developer's
+    //    interactive credentials.
+    return new ManagedIdentityCredential(new ManagedIdentityCredentialOptions());
 });
 
 builder.Services.AddSingleton(sp =>
@@ -79,8 +88,9 @@ builder.Services.AddHttpClient("GraphBeta", c =>
     c.Timeout = TimeSpan.FromMinutes(2);
 });
 
-// In-memory cache for Graph responses (shared across all user circuits)
-builder.Services.AddMemoryCache(opts => opts.SizeLimit = null);
+// Global in-memory cache (used by IntuneService for group display names only;
+// GraphResponseCache has its own dedicated, size-capped MemoryCache).
+builder.Services.AddMemoryCache();
 
 // Performance & cache options from configuration
 builder.Services.Configure<IntuneAssignmentViewer.Models.CacheOptions>(

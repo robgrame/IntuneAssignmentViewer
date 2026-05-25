@@ -19,7 +19,7 @@ public sealed class GraphResponseCache : IDisposable
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly TokenCredential _credential;
-    private readonly IMemoryCache _cache;
+    private readonly MemoryCache _cache;
     private readonly ILogger<GraphResponseCache> _logger;
     private readonly PerformanceOptions _perf;
     private readonly CacheOptions _cacheOpts;
@@ -31,28 +31,38 @@ public sealed class GraphResponseCache : IDisposable
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _urlLocks = new();
 
+    // Index of cached URLs that point to /assignments collections, so we can
+    // selectively invalidate them on user-requested Refresh.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _assignmentKeys = new();
+
     public GraphResponseCache(
         IHttpClientFactory httpClientFactory,
         TokenCredential credential,
-        IMemoryCache cache,
         IOptions<PerformanceOptions> perf,
         IOptions<CacheOptions> cacheOpts,
         ILogger<GraphResponseCache> logger)
     {
         _httpClientFactory = httpClientFactory;
         _credential = credential;
-        _cache = cache;
         _perf = perf.Value;
         _cacheOpts = cacheOpts.Value;
         _logger = logger;
         _concurrencyLimiter = new SemaphoreSlim(_perf.MaxConcurrentGraphRequests, _perf.MaxConcurrentGraphRequests);
+
+        // Dedicated MemoryCache so we can enforce a hard size cap without affecting
+        // other consumers of the global IMemoryCache (e.g. group name cache).
+        // SizeLimit is measured in arbitrary units; we use bytes (approximate JSON
+        // payload size). 64 MB is plenty for very large tenants and safe on a 1 GB
+        // on-prem instance.
+        var sizeLimitBytes = Math.Max(8L * 1024 * 1024, _cacheOpts.MaxSizeMegabytes * 1024L * 1024L);
+        _cache = new MemoryCache(new MemoryCacheOptions { SizeLimit = sizeLimitBytes });
     }
 
     /// <summary>
     /// GET a Graph URL with memory caching and concurrency limiting.
     /// Returns null on error (404, 403, network failure, etc.).
     /// </summary>
-    public async Task<JsonElement?> GetAsync(string url, TimeSpan ttl)
+    public async Task<JsonElement?> GetAsync(string url, TimeSpan ttl, CancellationToken ct = default)
     {
         // Fast path: cache hit
         if (_cache.TryGetValue<JsonElement?>(url, out var cached))
@@ -62,7 +72,7 @@ public sealed class GraphResponseCache : IDisposable
 
         // Coalesce concurrent identical requests via per-URL lock
         var urlLock = _urlLocks.GetOrAdd(url, _ => new SemaphoreSlim(1, 1));
-        await urlLock.WaitAsync();
+        await urlLock.WaitAsync(ct);
         try
         {
             // Re-check after acquiring the lock
@@ -71,14 +81,12 @@ public sealed class GraphResponseCache : IDisposable
                 return cached;
             }
 
-            var fetched = await FetchWithRetryAsync(url);
+            var fetched = await FetchWithRetryAsync(url, ct);
 
-            // Cache *all* outcomes including null (e.g. 403/404) for a short time to
-            // prevent re-hammering missing/forbidden endpoints.
             var effectiveTtl = fetched == null
                 ? TimeSpan.FromMinutes(_cacheOpts.NegativeTtlMinutes)
                 : ttl;
-            _cache.Set(url, fetched, effectiveTtl);
+            SetCacheEntry(url, fetched, effectiveTtl);
             return fetched;
         }
         finally
@@ -90,11 +98,35 @@ public sealed class GraphResponseCache : IDisposable
     }
 
     /// <summary>
+    /// Stores a JsonElement in the cache with proper Size (bytes) accounting
+    /// and tracks assignment-URL keys for targeted invalidation.
+    /// </summary>
+    private void SetCacheEntry(string url, JsonElement? value, TimeSpan ttl)
+    {
+        // Approximate size: serialize back to UTF-8 bytes. Null/empty entries
+        // still cost 1 byte to prevent cache poisoning via many "null" entries.
+        long size = 1;
+        if (value.HasValue)
+        {
+            try { size = Math.Max(1, value.Value.GetRawText().Length); } catch { /* keep default */ }
+        }
+
+        _cache.Set(url, value, new MemoryCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = ttl,
+            Size = size
+        });
+
+        if (url.Contains("/assignments", StringComparison.OrdinalIgnoreCase))
+            _assignmentKeys.TryAdd(url, 0);
+    }
+
+    /// <summary>
     /// Pre-fetch multiple Graph GET URLs in batches of up to 20 using POST /$batch,
     /// then populate the cache. Already-cached URLs are skipped. Returns once all
     /// batches have completed.
     /// </summary>
-    public async Task PreFetchBatchAsync(IEnumerable<string> urls, TimeSpan ttl)
+    public async Task PreFetchBatchAsync(IEnumerable<string> urls, TimeSpan ttl, CancellationToken ct = default)
     {
         if (!_perf.EnableBatchRequests) return;
 
@@ -108,17 +140,17 @@ public sealed class GraphResponseCache : IDisposable
         var chunks = toFetch.Chunk(batchSize).ToList();
         for (int i = 0; i < chunks.Count; i++)
         {
-            await ExecuteBatchAsync(chunks[i], ttl);
-            // Small gap between batches to avoid hitting the /$batch endpoint's
-            // own per-minute throttling limit (~50 req/min/tenant on some plans)
+            ct.ThrowIfCancellationRequested();
+            await ExecuteBatchAsync(chunks[i], ttl, ct);
             if (i < chunks.Count - 1 && _perf.BatchSpacingMs > 0)
             {
-                await Task.Delay(_perf.BatchSpacingMs);
+                try { await Task.Delay(_perf.BatchSpacingMs, ct); }
+                catch (OperationCanceledException) { throw; }
             }
         }
     }
 
-    private async Task ExecuteBatchAsync(string[] urls, TimeSpan ttl)
+    private async Task ExecuteBatchAsync(string[] urls, TimeSpan ttl, CancellationToken ct)
     {
         // Build $batch request body
         var requests = urls.Select((u, i) => new
@@ -134,22 +166,21 @@ public sealed class GraphResponseCache : IDisposable
         var batchUrl = "https://graph.microsoft.com/beta/$batch";
         var payload = JsonSerializer.Serialize(new { requests });
 
-        await _concurrencyLimiter.WaitAsync();
+        await _concurrencyLimiter.WaitAsync(ct);
         HttpResponseMessage? response = null;
         try
         {
-            var client = await GetClientAsync();
+            var client = await GetClientAsync(ct);
             using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
-            response = await client.PostAsync(batchUrl, content);
+            response = await client.PostAsync(batchUrl, content, ct);
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("$batch failed: {Status}", response.StatusCode);
-                // Fall back: cache nothing — subsequent individual GETs will populate
                 return;
             }
 
-            await using var stream = await response.Content.ReadAsStreamAsync();
-            using var doc = await JsonDocument.ParseAsync(stream);
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
             if (!doc.RootElement.TryGetProperty("responses", out var arr)) return;
 
             foreach (var r in arr.EnumerateArray())
@@ -174,7 +205,7 @@ public sealed class GraphResponseCache : IDisposable
                 }
                 // status 200 -> normal TTL; 403/404 -> negative TTL to avoid hammering
                 var ttlToUse = body == null ? TimeSpan.FromMinutes(_cacheOpts.NegativeTtlMinutes) : ttl;
-                _cache.Set(originalUrl, body, ttlToUse);
+                SetCacheEntry(originalUrl, body, ttlToUse);
             }
         }
         catch (Exception ex)
@@ -201,13 +232,13 @@ public sealed class GraphResponseCache : IDisposable
     }
 
     /// <summary>POST to Graph (e.g. $batch). Not cached.</summary>
-    public async Task<HttpResponseMessage> PostAsync(string url, HttpContent content)
+    public async Task<HttpResponseMessage> PostAsync(string url, HttpContent content, CancellationToken ct = default)
     {
-        await _concurrencyLimiter.WaitAsync();
+        await _concurrencyLimiter.WaitAsync(ct);
         try
         {
-            var client = await GetClientAsync();
-            return await client.PostAsync(url, content);
+            var client = await GetClientAsync(ct);
+            return await client.PostAsync(url, content, ct);
         }
         finally
         {
@@ -215,19 +246,20 @@ public sealed class GraphResponseCache : IDisposable
         }
     }
 
-    private async Task<JsonElement?> FetchWithRetryAsync(string url)
+    private async Task<JsonElement?> FetchWithRetryAsync(string url, CancellationToken ct)
     {
         const int maxAttempts = 3;
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
+            ct.ThrowIfCancellationRequested();
             TimeSpan? retryDelay = null;
 
-            await _concurrencyLimiter.WaitAsync();
+            await _concurrencyLimiter.WaitAsync(ct);
             HttpResponseMessage? response = null;
             try
             {
-                var client = await GetClientAsync();
-                response = await client.GetAsync(url);
+                var client = await GetClientAsync(ct);
+                response = await client.GetAsync(url, ct);
 
                 if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
                     (int)response.StatusCode == 503)
@@ -249,7 +281,7 @@ public sealed class GraphResponseCache : IDisposable
                     }
                     else
                     {
-                        var body = await response.Content.ReadAsStringAsync();
+                        var body = await response.Content.ReadAsStringAsync(ct);
                         _logger.LogWarning("Graph request failed: {Status} {Url} - {Body}",
                             response.StatusCode, url, body.Length > 500 ? body[..500] : body);
                     }
@@ -257,11 +289,12 @@ public sealed class GraphResponseCache : IDisposable
                 }
                 else
                 {
-                    await using var stream = await response.Content.ReadAsStreamAsync();
-                    using var doc = await JsonDocument.ParseAsync(stream);
+                    await using var stream = await response.Content.ReadAsStreamAsync(ct);
+                    using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
                     return doc.RootElement.Clone();
                 }
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Error fetching: {Url}", url);
@@ -270,15 +303,12 @@ public sealed class GraphResponseCache : IDisposable
             finally
             {
                 response?.Dispose();
-                // Release the global concurrency permit BEFORE sleeping for retry,
-                // otherwise we deadlock under load (10 throttled requests holding
-                // all permits while sleeping their backoff).
                 _concurrencyLimiter.Release();
             }
 
             if (retryDelay.HasValue)
             {
-                await Task.Delay(retryDelay.Value);
+                await Task.Delay(retryDelay.Value, ct);
                 continue;
             }
             break;
@@ -286,33 +316,50 @@ public sealed class GraphResponseCache : IDisposable
         return null;
     }
 
-    /// <summary>Bust the cache (e.g. on user-triggered Refresh).</summary>
-    public void InvalidateAll()
+    /// <summary>
+    /// Bust ONLY the cached /assignments responses. Catalog lists and group-name
+    /// entries are kept (they change rarely). Called when a user clicks Refresh.
+    /// </summary>
+    public void InvalidateAssignments()
     {
-        if (_cache is MemoryCache mc) mc.Compact(1.0);
+        int removed = 0;
+        foreach (var key in _assignmentKeys.Keys.ToArray())
+        {
+            _cache.Remove(key);
+            _assignmentKeys.TryRemove(key, out _);
+            removed++;
+        }
+        _logger.LogInformation("Invalidated {Count} cached /assignments entries", removed);
     }
 
-    public async Task<HttpClient> GetClientAsync()
+    /// <summary>Nuke EVERYTHING in this cache. Use sparingly (admin / tests).</summary>
+    public void InvalidateAll()
+    {
+        _cache.Compact(1.0);
+        _assignmentKeys.Clear();
+    }
+
+    public async Task<HttpClient> GetClientAsync(CancellationToken ct = default)
     {
         var client = _httpClientFactory.CreateClient("GraphBeta");
-        var token = await GetTokenAsync();
+        var token = await GetTokenAsync(ct);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return client;
     }
 
-    private async Task<string> GetTokenAsync()
+    private async Task<string> GetTokenAsync(CancellationToken ct = default)
     {
         if (_cachedToken != null && DateTimeOffset.UtcNow < _tokenExpiresOn.AddMinutes(-5))
             return _cachedToken;
 
-        await _tokenLock.WaitAsync();
+        await _tokenLock.WaitAsync(ct);
         try
         {
             if (_cachedToken != null && DateTimeOffset.UtcNow < _tokenExpiresOn.AddMinutes(-5))
                 return _cachedToken;
 
-            var ctx = new TokenRequestContext(new[] { "https://graph.microsoft.com/.default" });
-            var t = await _credential.GetTokenAsync(ctx, CancellationToken.None);
+            var requestCtx = new TokenRequestContext(new[] { "https://graph.microsoft.com/.default" });
+            var t = await _credential.GetTokenAsync(requestCtx, ct);
             _cachedToken = t.Token;
             _tokenExpiresOn = t.ExpiresOn;
             return _cachedToken;
@@ -325,6 +372,7 @@ public sealed class GraphResponseCache : IDisposable
 
     public void Dispose()
     {
+        _cache.Dispose();
         _concurrencyLimiter.Dispose();
         _tokenLock.Dispose();
         foreach (var l in _urlLocks.Values) l.Dispose();

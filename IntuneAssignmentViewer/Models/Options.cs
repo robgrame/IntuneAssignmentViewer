@@ -13,6 +13,11 @@ public class CacheOptions
 
     /// <summary>TTL for cached null/error responses (404/403) — prevents re-hammering.</summary>
     public int NegativeTtlMinutes { get; set; } = 1;
+
+    /// <summary>Hard size cap for the Graph response cache. Approximates JSON payload bytes.
+    /// On a 1 GB on-prem instance, keep this ≤ 128. Defaults to 64 MB which fits very
+    /// large tenants comfortably.</summary>
+    public int MaxSizeMegabytes { get; set; } = 64;
 }
 
 public class PerformanceOptions
