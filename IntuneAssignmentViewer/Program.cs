@@ -79,6 +79,26 @@ builder.Services.AddHttpClient("GraphBeta", c =>
     c.Timeout = TimeSpan.FromMinutes(2);
 });
 
+// In-memory cache for Graph responses (shared across all user circuits)
+builder.Services.AddMemoryCache(opts => opts.SizeLimit = null);
+
+// Performance & cache options from configuration
+builder.Services.Configure<IntuneAssignmentViewer.Models.CacheOptions>(
+    builder.Configuration.GetSection("Cache"));
+builder.Services.Configure<IntuneAssignmentViewer.Models.PerformanceOptions>(
+    builder.Configuration.GetSection("Performance"));
+builder.Services.Configure<IntuneAssignmentViewer.Models.WarmupOptions>(
+    builder.Configuration.GetSection("Warmup"));
+
+builder.Services.AddSingleton<IntuneAssignmentViewer.Services.GraphResponseCache>();
+
+// Optional background pre-warming of the cache (off by default for on-prem safety)
+var warmupEnabled = builder.Configuration.GetValue<bool>("Warmup:Enabled");
+if (warmupEnabled)
+{
+    builder.Services.AddHostedService<IntuneAssignmentViewer.Services.WarmupHostedService>();
+}
+
 // Branding configuration
 builder.Services.Configure<BrandingSettings>(builder.Configuration.GetSection("Branding"));
 

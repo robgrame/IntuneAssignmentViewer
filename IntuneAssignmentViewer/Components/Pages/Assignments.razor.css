@@ -485,3 +485,162 @@
 }
 
 
+
+/* ===== Quick access (virtual targets) ===== */
+.quick-access {
+    border-top: 1px dashed #d0d0d0;
+    padding-top: 1.25rem;
+    margin-top: 1.5rem;
+}
+
+.quick-access-label {
+    font-size: 0.85rem;
+    color: #666;
+    margin-bottom: 0.6rem;
+    font-weight: 500;
+}
+
+.quick-access-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+}
+
+@media (max-width: 600px) {
+    .quick-access-buttons { grid-template-columns: 1fr; }
+}
+
+.quick-access-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.9rem 1rem;
+    border: 2px solid #e0e0e0;
+    border-radius: 12px;
+    background: white;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.quick-access-btn:hover {
+    border-color: #0078d4;
+    background: #f0f7ff;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 120, 212, 0.12);
+}
+
+.quick-access-btn.all-users:hover { border-color: #107c10; background: #f0fdf4; }
+.quick-access-btn.all-devices:hover { border-color: #5c2d91; background: #faf5ff; }
+
+.qa-icon {
+    font-size: 1.8rem;
+    flex-shrink: 0;
+}
+
+.qa-title {
+    font-weight: 600;
+    color: #1a1a1a;
+}
+
+.qa-desc {
+    color: #777;
+    font-size: 0.78rem;
+}
+
+/* ===== Details button on cards/rows ===== */
+.details-btn {
+    margin-left: auto;
+    padding: 0.25rem 0.6rem;
+    border-radius: 6px;
+    border: 1px solid #d0d0d0;
+    background: white;
+    font-size: 0.78rem;
+    cursor: pointer;
+    color: #555;
+    transition: all 0.15s;
+}
+.details-btn:hover {
+    border-color: #0078d4;
+    color: #0078d4;
+    background: #f0f7ff;
+}
+.assignment-footer { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+
+.details-btn-sm {
+    padding: 0.2rem 0.45rem;
+    border-radius: 6px;
+    border: 1px solid #d0d0d0;
+    background: white;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+.details-btn-sm:hover {
+    border-color: #0078d4;
+    background: #f0f7ff;
+}
+
+/* ===== Modal ===== */
+.modal-backdrop-custom {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1050;
+    backdrop-filter: blur(2px);
+}
+.modal-custom {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(900px, 95vw);
+    max-height: 85vh;
+    background: white;
+    border-radius: 14px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    z-index: 1060;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.modal-header-custom {
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 1rem;
+    background: linear-gradient(135deg, #f8f9fa, #fff);
+}
+.modal-pretitle {
+    font-size: 0.78rem;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.3rem;
+}
+.modal-title-custom { margin: 0; color: #1a1a1a; }
+.modal-close {
+    border: none;
+    background: transparent;
+    font-size: 1.3rem;
+    cursor: pointer;
+    color: #999;
+    padding: 0.25rem 0.5rem;
+    border-radius: 6px;
+}
+.modal-close:hover { background: #f0f0f0; color: #333; }
+
+.modal-body-custom {
+    padding: 1.25rem 1.5rem;
+    overflow-y: auto;
+}
+
+.details-table th {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    color: #666;
+    letter-spacing: 0.5px;
+}
+.details-table td { vertical-align: middle; }
+.target-icon { font-size: 1.1rem; margin-right: 0.4rem; }

@@ -185,6 +185,23 @@ Same codebase, runs on Windows Server with IIS.
   "Authorization": {
     "RequiredRole": "IntuneReader"  // App role required to access the portal
   },
+  "Cache": {                      // In-memory cache TTLs (minutes)
+    "CatalogTtlMinutes": 10,        // Lists of policies/apps
+    "AssignmentsTtlMinutes": 10,    // Per-policy /assignments responses
+    "GroupNamesTtlMinutes": 30,     // Resolved Entra ID group display names
+    "NegativeTtlMinutes": 1         // 404/403 responses (prevents hammering)
+  },
+  "Performance": {
+    "EnableBatchRequests": true,    // Use Graph $batch to combine up to 20 GETs in 1 HTTP call
+    "BatchSize": 20,                // Graph hard limit = 20
+    "MaxConcurrentGraphRequests": 10, // Semaphore cap (in-flight Graph calls)
+    "BatchSpacingMs": 100           // Pause between consecutive $batch calls (anti-throttle)
+  },
+  "Warmup": {                     // Background cache pre-warming
+    "Enabled": false,               // OFF by default for on-prem safety; ON for cloud
+    "InitialDelaySeconds": 60,      // Wait after startup before first warmup
+    "IntervalMinutes": 10           // Should be ≤ Cache:AssignmentsTtlMinutes
+  },
   "CookiePolicy": {
     "Secure": "Always"            // Use "SameAsRequest" for local HTTP dev
   },
@@ -194,6 +211,24 @@ Same codebase, runs on Windows Server with IIS.
   }
 }
 ```
+
+### Scalability & concurrent users
+
+The app is designed to handle many concurrent administrators against a single tenant:
+
+| Mechanism | What it does | Default |
+|---|---|---|
+| **Singleton in-memory cache** | All user circuits share Graph responses. Second user within TTL gets results in ms instead of seconds. | Always on |
+| **Per-URL request coalescing** | If 10 users request the same group simultaneously, only 1 Graph call is made; the others await the result. | Always on |
+| **Concurrency limiter** | A `SemaphoreSlim` caps in-flight Graph calls to `MaxConcurrentGraphRequests`. Prevents bursting that triggers HTTP 429. | 10 in-flight |
+| **Retry with `Retry-After`** | Throttled requests (429/503) automatically retry with exponential backoff respecting the `Retry-After` header. | 3 attempts |
+| **Negative caching** | 404/403 responses are cached briefly to prevent hammering missing/forbidden endpoints. | 1 min |
+| **Background warmup** | Optional `IHostedService` periodically pre-fetches all catalogs + per-policy assignments via Graph `$batch`. Users almost always hit a warm cache. | OFF (opt-in) |
+| **Graph `$batch` (during warmup)** | The warmup service combines up to 20 GETs per HTTP call, reducing cold-load HTTP overhead by ~95%. | Used only by warmup |
+
+**Recommendation for large tenants (>500 policies):**
+- Cloud: enable `Warmup:Enabled = true` (already on in the production deployment).
+- On-prem: enable warmup only after measuring impact on your Graph app quota.
 
 ## 🛠️ Tech stack
 

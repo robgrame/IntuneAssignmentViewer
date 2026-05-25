@@ -50,6 +50,26 @@
             {
                 <div class="alert alert-light mt-2">No groups found matching "<strong>@searchTerm</strong>"</div>
             }
+
+            <div class="quick-access mt-4">
+                <div class="quick-access-label">Or view virtual targets:</div>
+                <div class="quick-access-buttons">
+                    <button class="quick-access-btn all-users" @onclick="SelectAllUsers">
+                        <span class="qa-icon">🧑‍🤝‍🧑</span>
+                        <div>
+                            <div class="qa-title">All Users</div>
+                            <small class="qa-desc">Every licensed user in the tenant</small>
+                        </div>
+                    </button>
+                    <button class="quick-access-btn all-devices" @onclick="SelectAllDevices">
+                        <span class="qa-icon">💻</span>
+                        <div>
+                            <div class="qa-title">All Devices</div>
+                            <small class="qa-desc">Every Intune-enrolled device</small>
+                        </div>
+                    </button>
+                </div>
+            </div>
         </div>
     }
     else
@@ -57,18 +77,29 @@
         <div class="selected-group-header mb-4">
             <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <div class="d-flex align-items-center gap-2">
-                    <span class="group-icon-lg">👥</span>
+                    <span class="group-icon-lg">@(IsVirtualGroup ? (selectedGroup.Id == IntuneAssignmentViewer.Services.IntuneService.VirtualAllUsersId ? "🧑‍🤝‍🧑" : "💻") : "👥")</span>
                     <div>
-                        <h4 class="mb-0">@selectedGroup.DisplayName</h4>
+                        <h4 class="mb-0">
+                            @selectedGroup.DisplayName
+                            @if (IsVirtualGroup)
+                            {
+                                <span class="badge bg-info text-dark ms-2">Virtual</span>
+                            }
+                        </h4>
                         @if (!string.IsNullOrEmpty(selectedGroup.Description))
                         {
                             <small class="text-muted">@selectedGroup.Description</small>
                         }
                     </div>
                 </div>
-                <button class="btn btn-outline-secondary btn-sm" @onclick="ClearSelection">
-                    ✕ Change Group
-                </button>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-outline-primary btn-sm" @onclick="RefreshAssignments" disabled="@isLoadingAssignments" title="Bypass cache and re-fetch from Microsoft Graph">
+                        🔄 Refresh
+                    </button>
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="ClearSelection">
+                        ✕ Change Group
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -235,6 +266,12 @@
                                 <span class="badge @GetIntentBadgeClass(assignment.AssignmentIntent)">
                                     @GetIntentIcon(assignment.AssignmentIntent) @GetIntentLabel(assignment.AssignmentIntent)
                                 </span>
+                                @if (!string.IsNullOrEmpty(assignment.AssignmentsUrl))
+                                {
+                                    <button class="details-btn" @onclick="() => OpenDetails(assignment)" title="View all assignment targets">
+                                        🔍 Details
+                                    </button>
+                                }
                             </div>
                         </div>
                     }
@@ -253,6 +290,7 @@
                                 <th>Platform</th>
                                 <th>Intent</th>
                                 <th>Description</th>
+                                <th></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -275,6 +313,14 @@
                                         </span>
                                     </td>
                                     <td><small class="text-muted">@TruncateDescription(a.Description, 80)</small></td>
+                                    <td>
+                                        @if (!string.IsNullOrEmpty(a.AssignmentsUrl))
+                                        {
+                                            <button class="details-btn-sm" @onclick="() => OpenDetails(a)" title="View all assignment targets">
+                                                🔍
+                                            </button>
+                                        }
+                                    </td>
                                 </tr>
                             }
                         </tbody>
@@ -302,6 +348,96 @@
     }
 </div>
 
+@if (detailsAssignment != null)
+{
+    <div class="modal-backdrop-custom" @onclick="CloseDetails"></div>
+    <div class="modal-custom" role="dialog" aria-modal="true">
+        <div class="modal-header-custom">
+            <div>
+                <div class="modal-pretitle">@GetPolicyIcon(detailsAssignment.PolicyType) @GetPolicyLabel(detailsAssignment.PolicyType) • @detailsAssignment.PolicySubType</div>
+                <h4 class="modal-title-custom">@detailsAssignment.PolicyName</h4>
+            </div>
+            <button class="modal-close" @onclick="CloseDetails" aria-label="Close">✕</button>
+        </div>
+        <div class="modal-body-custom">
+            @if (isLoadingDetails)
+            {
+                <div class="loading-state">
+                    <div class="spinner-border spinner-border-sm text-primary"></div>
+                    <span>Loading assignment targets...</span>
+                </div>
+            }
+            else if (detailsList.Count == 0)
+            {
+                <div class="empty-state">
+                    <span class="empty-icon">📭</span>
+                    <p>No assignment targets returned for this policy.</p>
+                </div>
+            }
+            else
+            {
+                <p class="text-muted small mb-3">@detailsList.Count target(s) — including assignments to other groups, All Users and All Devices.</p>
+                <table class="table table-sm details-table">
+                    <thead>
+                        <tr>
+                            <th>Target</th>
+                            <th>Mode</th>
+                            <th>Intent</th>
+                            <th>Filter</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var d in detailsList)
+                        {
+                            <tr>
+                                <td>
+                                    <span class="target-icon">@GetTargetIcon(d.TargetType)</span>
+                                    <span class="fw-semibold">@d.GroupName</span>
+                                    @if (d.TargetType == AssignmentTargetType.AllUsers || d.TargetType == AssignmentTargetType.AllDevices)
+                                    {
+                                        <span class="badge bg-info text-dark ms-1">Virtual</span>
+                                    }
+                                    @if (!string.IsNullOrEmpty(d.GroupId))
+                                    {
+                                        <div><small class="text-muted">@d.GroupId</small></div>
+                                    }
+                                </td>
+                                <td>
+                                    <span class="badge @(d.IsExcluded ? "bg-danger" : "bg-success")">
+                                        @(d.IsExcluded ? "⛔ Exclude" : "✓ Include")
+                                    </span>
+                                </td>
+                                <td>
+                                    @if (!string.IsNullOrEmpty(d.Intent))
+                                    {
+                                        <span class="badge @GetIntentBadgeClass(d.Intent)">
+                                            @GetIntentIcon(d.Intent) @d.Intent
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">—</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (!string.IsNullOrEmpty(d.FilterType))
+                                    {
+                                        <span class="badge bg-light text-dark">@d.FilterType</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">—</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+}
+
 @code {
     private enum ViewMode { Cards, Table }
 
@@ -317,6 +453,11 @@
     private bool isSearching;
     private bool isLoadingAssignments;
     private System.Timers.Timer? debounceTimer;
+
+    // Details modal state
+    private IntuneAssignment? detailsAssignment;
+    private List<PolicyAssignmentDetail> detailsList = new();
+    private bool isLoadingDetails;
 
     private static readonly (PolicyType type, string icon, string label)[] PolicyTypeMeta = new[]
     {
@@ -377,6 +518,30 @@
         selectedFilter = null;
         await LoadAssignments();
     }
+
+    private async Task SelectAllUsers()
+    {
+        await SelectGroup(new GroupInfo
+        {
+            Id = IntuneAssignmentViewer.Services.IntuneService.VirtualAllUsersId,
+            DisplayName = "All Users (virtual)",
+            Description = "Every licensed user in the tenant"
+        });
+    }
+
+    private async Task SelectAllDevices()
+    {
+        await SelectGroup(new GroupInfo
+        {
+            Id = IntuneAssignmentViewer.Services.IntuneService.VirtualAllDevicesId,
+            DisplayName = "All Devices (virtual)",
+            Description = "Every Intune-enrolled device"
+        });
+    }
+
+    private bool IsVirtualGroup => selectedGroup != null
+        && (selectedGroup.Id == IntuneAssignmentViewer.Services.IntuneService.VirtualAllUsersId
+         || selectedGroup.Id == IntuneAssignmentViewer.Services.IntuneService.VirtualAllDevicesId);
 
     private void ClearSelection()
     {
@@ -449,6 +614,12 @@
         }
     }
 
+    private async Task RefreshAssignments()
+    {
+        IntuneService.InvalidateCache();
+        await LoadAssignments();
+    }
+
     private static string GetPolicyIcon(PolicyType type) => type switch
     {
         PolicyType.Configuration => "⚙️",
@@ -498,6 +669,37 @@
         PolicyType.Script => "bar-teal",
         PolicyType.Provisioning => "bar-purple",
         _ => "bar-gray"
+    };
+
+    private async Task OpenDetails(IntuneAssignment a)
+    {
+        detailsAssignment = a;
+        detailsList = new();
+        isLoadingDetails = true;
+        StateHasChanged();
+        try
+        {
+            detailsList = await IntuneService.GetPolicyAssignmentsAsync(a.AssignmentsUrl);
+        }
+        finally
+        {
+            isLoadingDetails = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CloseDetails()
+    {
+        detailsAssignment = null;
+        detailsList.Clear();
+    }
+
+    private static string GetTargetIcon(AssignmentTargetType t) => t switch
+    {
+        AssignmentTargetType.AllUsers => "🧑‍🤝‍🧑",
+        AssignmentTargetType.AllDevices => "💻",
+        AssignmentTargetType.Group => "👥",
+        _ => "❓"
     };
 
     private static string GetPlatformIcon(string platform) => platform.ToLowerInvariant() switch
