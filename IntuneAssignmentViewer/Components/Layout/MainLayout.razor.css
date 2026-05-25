@@ -65,6 +65,22 @@
     background: #f8f9fa;
 }
 
+.app-footer {
+    background: #1a1a1a;
+    color: rgba(255, 255, 255, 0.7);
+    padding: 0.75rem 1.5rem;
+    font-size: 0.8rem;
+    margin-top: auto;
+}
+
+.version-tag {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-family: 'Consolas', monospace;
+    font-size: 0.75rem;
+}
+
 #blazor-error-ui {
     color-scheme: light only;
     background: lightyellow;

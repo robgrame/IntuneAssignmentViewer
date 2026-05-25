@@ -15,7 +15,7 @@
         <div class="search-section">
             <label class="form-label fw-semibold">Search Entra ID Group</label>
             <div class="position-relative">
-                <input type="text" class="form-control form-control-lg search-input" 
+                <input type="text" class="form-control form-control-lg search-input"
                        placeholder="Start typing a group name..."
                        @bind="searchTerm" @bind:event="oninput" @bind:after="OnSearchInput" />
                 @if (isSearching)
@@ -55,7 +55,7 @@
     else
     {
         <div class="selected-group-header mb-4">
-            <div class="d-flex align-items-center justify-content-between">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <div class="d-flex align-items-center gap-2">
                     <span class="group-icon-lg">👥</span>
                     <div>
@@ -72,19 +72,27 @@
             </div>
         </div>
 
-        <div class="filter-tabs mb-4">
-            <button class="filter-tab @(selectedFilter == null ? "active" : "")" @onclick="() => SetFilter(null)">
-                🔍 All
-            </button>
-            <button class="filter-tab @(selectedFilter == PolicyType.Configuration ? "active" : "")" @onclick="() => SetFilter(PolicyType.Configuration)">
-                ⚙️ Configuration
-            </button>
-            <button class="filter-tab @(selectedFilter == PolicyType.Compliance ? "active" : "")" @onclick="() => SetFilter(PolicyType.Compliance)">
-                ✅ Compliance
-            </button>
-            <button class="filter-tab @(selectedFilter == PolicyType.Application ? "active" : "")" @onclick="() => SetFilter(PolicyType.Application)">
-                📦 Applications
-            </button>
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-3">
+            <div class="filter-tabs">
+                <button class="filter-tab @(selectedFilter == null ? "active" : "")" @onclick="() => SetFilter(null)">
+                    🔍 All
+                </button>
+                @foreach (var (type, icon, label) in PolicyTypeMeta)
+                {
+                    <button class="filter-tab @(selectedFilter == type ? "active" : "")" @onclick="() => SetFilter(type)">
+                        @icon @label
+                    </button>
+                }
+            </div>
+
+            <div class="view-toggle">
+                <button class="view-btn @(viewMode == ViewMode.Cards ? "active" : "")" @onclick="() => viewMode = ViewMode.Cards" title="Card view">
+                    ▦ Cards
+                </button>
+                <button class="view-btn @(viewMode == ViewMode.Table ? "active" : "")" @onclick="() => viewMode = ViewMode.Table" title="Table view">
+                    ☰ Table
+                </button>
+            </div>
         </div>
 
         @if (isLoadingAssignments)
@@ -96,49 +104,119 @@
         }
         else if (filteredAssignments.Any())
         {
-            <div class="assignments-grid">
-                @foreach (var assignment in filteredAssignments)
-                {
-                    <div class="assignment-card">
-                        <div class="assignment-card-header">
-                            <span class="policy-icon">@GetPolicyIcon(assignment.PolicyType)</span>
-                            <span class="badge @GetBadgeClass(assignment.PolicyType)">@assignment.PolicyType</span>
+            @if (viewMode == ViewMode.Cards)
+            {
+                <div class="assignments-grid">
+                    @foreach (var assignment in filteredAssignments)
+                    {
+                        <div class="assignment-card">
+                            <div class="assignment-card-header">
+                                <span class="policy-icon">@GetPolicyIcon(assignment.PolicyType)</span>
+                                <span class="badge @GetBadgeClass(assignment.PolicyType)">@GetPolicyLabel(assignment.PolicyType)</span>
+                            </div>
+                            <h6 class="assignment-name">@assignment.PolicyName</h6>
+                            <div class="assignment-meta">
+                                @if (!string.IsNullOrEmpty(assignment.PolicySubType))
+                                {
+                                    <span class="meta-pill">@assignment.PolicySubType</span>
+                                }
+                                @if (!string.IsNullOrEmpty(assignment.Platform))
+                                {
+                                    <span class="meta-pill platform">@GetPlatformIcon(assignment.Platform) @assignment.Platform</span>
+                                }
+                            </div>
+                            @if (!string.IsNullOrEmpty(assignment.Description))
+                            {
+                                <p class="assignment-desc">@TruncateDescription(assignment.Description)</p>
+                            }
+                            <div class="assignment-footer">
+                                <span class="badge @GetIntentBadgeClass(assignment.AssignmentIntent)">
+                                    @GetIntentIcon(assignment.AssignmentIntent) @assignment.AssignmentIntent
+                                </span>
+                            </div>
                         </div>
-                        <h6 class="assignment-name">@assignment.PolicyName</h6>
-                        @if (!string.IsNullOrEmpty(assignment.Description))
-                        {
-                            <p class="assignment-desc">@TruncateDescription(assignment.Description)</p>
-                        }
-                        <div class="assignment-footer">
-                            <span class="badge @(assignment.AssignmentIntent == "Exclude" ? "bg-danger" : "bg-success")">
-                                @(assignment.AssignmentIntent == "Exclude" ? "⛔" : "✓") @assignment.AssignmentIntent
-                            </span>
-                        </div>
-                    </div>
-                }
-            </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="table table-hover assignments-table">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Sub-type</th>
+                                <th>Platform</th>
+                                <th>Intent</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var a in filteredAssignments)
+                            {
+                                <tr>
+                                    <td><span class="row-icon">@GetPolicyIcon(a.PolicyType)</span></td>
+                                    <td class="fw-semibold">@a.PolicyName</td>
+                                    <td><span class="badge @GetBadgeClass(a.PolicyType)">@GetPolicyLabel(a.PolicyType)</span></td>
+                                    <td>@a.PolicySubType</td>
+                                    <td>
+                                        @if (!string.IsNullOrEmpty(a.Platform))
+                                        {
+                                            <span>@GetPlatformIcon(a.Platform) @a.Platform</span>
+                                        }
+                                    </td>
+                                    <td>
+                                        <span class="badge @GetIntentBadgeClass(a.AssignmentIntent)">
+                                            @GetIntentIcon(a.AssignmentIntent) @a.AssignmentIntent
+                                        </span>
+                                    </td>
+                                    <td><small class="text-muted">@TruncateDescription(a.Description, 80)</small></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
             <p class="text-muted mt-3">Total: @filteredAssignments.Count assignment(s)</p>
         }
         else
         {
             <div class="empty-state">
                 <span class="empty-icon">📭</span>
-                <p>No assignments found for this group@(selectedFilter != null ? $" with type '{selectedFilter}'" : "").</p>
+                <p>No assignments found for this group@(selectedFilter != null ? $" with type '{GetPolicyLabel(selectedFilter.Value)}'" : "").</p>
             </div>
         }
     }
 </div>
 
 @code {
+    private enum ViewMode { Cards, Table }
+
     private string searchTerm = string.Empty;
     private List<GroupInfo> groups = new();
     private GroupInfo? selectedGroup;
     private List<IntuneAssignment> assignments = new();
     private List<IntuneAssignment> filteredAssignments = new();
     private PolicyType? selectedFilter;
+    private ViewMode viewMode = ViewMode.Cards;
     private bool isSearching;
     private bool isLoadingAssignments;
     private System.Timers.Timer? debounceTimer;
+
+    private static readonly (PolicyType type, string icon, string label)[] PolicyTypeMeta = new[]
+    {
+        (PolicyType.Configuration, "⚙️", "Configuration"),
+        (PolicyType.AdministrativeTemplate, "🧾", "Admin Templates"),
+        (PolicyType.Compliance, "✅", "Compliance"),
+        (PolicyType.Application, "📦", "Applications"),
+        (PolicyType.AppProtection, "🛡️", "App Protection"),
+        (PolicyType.AppConfiguration, "🧩", "App Config"),
+        (PolicyType.EndpointSecurity, "🔒", "Endpoint Security"),
+        (PolicyType.Script, "📜", "Scripts"),
+        (PolicyType.Provisioning, "🚀", "Provisioning"),
+    };
 
     private async Task OnSearchInput()
     {
@@ -151,8 +229,7 @@
             return;
         }
 
-        debounceTimer = new System.Timers.Timer(400);
-        debounceTimer.AutoReset = false;
+        debounceTimer = new System.Timers.Timer(400) { AutoReset = false };
         debounceTimer.Elapsed += async (s, e) =>
         {
             await InvokeAsync(async () =>
@@ -167,10 +244,8 @@
     private async Task SearchGroups()
     {
         if (string.IsNullOrWhiteSpace(searchTerm) || searchTerm.Length < 3) return;
-
         isSearching = true;
         StateHasChanged();
-
         try
         {
             groups = await IntuneService.SearchGroupsAsync(searchTerm.Trim());
@@ -202,20 +277,31 @@
     private async Task SetFilter(PolicyType? filter)
     {
         selectedFilter = filter;
-        await LoadAssignments();
+        // Load full set once, then filter client-side; or re-query for performance
+        if (assignments.Count == 0)
+        {
+            await LoadAssignments();
+        }
+        else
+        {
+            filteredAssignments = filter == null
+                ? assignments
+                : assignments.Where(a => a.PolicyType == filter).ToList();
+        }
     }
 
     private async Task LoadAssignments()
     {
         if (selectedGroup == null) return;
-
         isLoadingAssignments = true;
         StateHasChanged();
-
         try
         {
-            assignments = await IntuneService.GetAssignmentsForGroupAsync(selectedGroup.Id, selectedFilter);
-            filteredAssignments = assignments;
+            // Always fetch ALL types once, then filter client-side
+            assignments = await IntuneService.GetAssignmentsForGroupAsync(selectedGroup.Id, null);
+            filteredAssignments = selectedFilter == null
+                ? assignments
+                : assignments.Where(a => a.PolicyType == selectedFilter).ToList();
         }
         finally
         {
@@ -226,23 +312,71 @@
     private static string GetPolicyIcon(PolicyType type) => type switch
     {
         PolicyType.Configuration => "⚙️",
+        PolicyType.AdministrativeTemplate => "🧾",
         PolicyType.Compliance => "✅",
         PolicyType.Application => "📦",
+        PolicyType.AppProtection => "🛡️",
+        PolicyType.AppConfiguration => "🧩",
+        PolicyType.EndpointSecurity => "🔒",
+        PolicyType.Script => "📜",
+        PolicyType.Provisioning => "🚀",
         _ => "📄"
+    };
+
+    private static string GetPolicyLabel(PolicyType type) => type switch
+    {
+        PolicyType.AdministrativeTemplate => "Admin Template",
+        PolicyType.AppProtection => "App Protection",
+        PolicyType.AppConfiguration => "App Config",
+        PolicyType.EndpointSecurity => "Endpoint Security",
+        _ => type.ToString()
     };
 
     private static string GetBadgeClass(PolicyType type) => type switch
     {
         PolicyType.Configuration => "bg-info text-dark",
+        PolicyType.AdministrativeTemplate => "bg-secondary",
         PolicyType.Compliance => "bg-warning text-dark",
         PolicyType.Application => "bg-primary",
+        PolicyType.AppProtection => "bg-danger",
+        PolicyType.AppConfiguration => "bg-success",
+        PolicyType.EndpointSecurity => "bg-dark",
+        PolicyType.Script => "bg-info",
+        PolicyType.Provisioning => "bg-purple",
         _ => "bg-secondary"
     };
 
-    private static string TruncateDescription(string description)
+    private static string GetPlatformIcon(string platform) => platform.ToLowerInvariant() switch
+    {
+        var s when s.Contains("windows") => "🪟",
+        "ios" => "🍎",
+        "macos" => "🖥️",
+        "android" => "🤖",
+        _ => ""
+    };
+
+    private static string GetIntentIcon(string intent) => intent.ToLowerInvariant() switch
+    {
+        "exclude" => "⛔",
+        "uninstall" => "🗑️",
+        "available" => "📥",
+        "required" => "📌",
+        _ => "✓"
+    };
+
+    private static string GetIntentBadgeClass(string intent) => intent.ToLowerInvariant() switch
+    {
+        "exclude" => "bg-danger",
+        "uninstall" => "bg-warning text-dark",
+        "available" => "bg-info text-dark",
+        "required" => "bg-primary",
+        _ => "bg-success"
+    };
+
+    private static string TruncateDescription(string description, int max = 120)
     {
         if (string.IsNullOrEmpty(description)) return "";
-        return description.Length > 120 ? description[..120] + "..." : description;
+        return description.Length > max ? description[..max] + "..." : description;
     }
 
     public void Dispose()

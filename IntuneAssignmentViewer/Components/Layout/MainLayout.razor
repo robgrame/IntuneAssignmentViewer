@@ -8,14 +8,18 @@
                 <a href="/" class="navbar-brand-link">
                     <img src="@BrandingOptions.Value.LogoPath" alt="Logo" class="company-logo" onerror="this.style.display='none'" />
                 </a>
-                <nav class="nav-links">
-                    <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                        <span class="nav-icon">🏠</span> Home
-                    </NavLink>
-                    <NavLink class="nav-link" href="assignments">
-                        <span class="nav-icon">📋</span> Assignments
-                    </NavLink>
-                </nav>
+                <AuthorizeView>
+                    <Authorized>
+                        <nav class="nav-links">
+                            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                                <span class="nav-icon">🏠</span> Home
+                            </NavLink>
+                            <NavLink class="nav-link" href="assignments">
+                                <span class="nav-icon">📋</span> Assignments
+                            </NavLink>
+                        </nav>
+                    </Authorized>
+                </AuthorizeView>
             </div>
             <div class="d-flex align-items-center gap-3">
                 <AuthorizeView>
@@ -36,6 +40,13 @@
             @Body
         </article>
     </main>
+
+    <footer class="app-footer">
+        <div class="container-fluid d-flex justify-content-between align-items-center">
+            <span>© @DateTime.UtcNow.Year @BrandingOptions.Value.AppTitle</span>
+            <span class="version-tag">v@(IntuneAssignmentViewer.Services.VersionInfo.Version)</span>
+        </div>
+    </footer>
 </div>
 
 <div id="blazor-error-ui" data-nosnippet>

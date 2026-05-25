@@ -12,7 +12,7 @@ using IntuneAssignmentViewer.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure forwarded headers (required for Linux App Service behind reverse proxy)
+// Configure forwarded headers (required when behind a reverse proxy: Azure Linux App Service, IIS, nginx, etc.)
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
@@ -24,10 +24,11 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAd"));
 
-// Configure OIDC cookie for reverse proxy scenarios
+// Configure cookie - "Always" for HTTPS-only deployments, configurable for on-prem
+var cookieSecurePolicy = builder.Configuration.GetValue<string>("CookiePolicy:Secure") ?? "Always";
 builder.Services.Configure<CookiePolicyOptions>(options =>
 {
-    options.Secure = CookieSecurePolicy.Always;
+    options.Secure = Enum.TryParse<CookieSecurePolicy>(cookieSecurePolicy, true, out var p) ? p : CookieSecurePolicy.Always;
 });
 
 // Role-based authorization
@@ -45,10 +46,30 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddControllersWithViews()
     .AddMicrosoftIdentityUI();
 
-// Microsoft Graph client using Managed Identity (no app secret needed for Graph calls)
+// Microsoft Graph client - supports both Managed Identity (Azure) and Client Secret (on-prem)
 builder.Services.AddSingleton(sp =>
 {
-    var credential = new DefaultAzureCredential();
+    var graphConfig = builder.Configuration.GetSection("Graph");
+    var tenantId = graphConfig.GetValue<string>("TenantId") ?? builder.Configuration.GetValue<string>("AzureAd:TenantId");
+    var clientId = graphConfig.GetValue<string>("ClientId");
+    var clientSecret = graphConfig.GetValue<string>("ClientSecret");
+
+    Azure.Core.TokenCredential credential;
+
+    // If explicit Graph client credentials are provided (on-prem scenario), use ClientSecretCredential
+    if (!string.IsNullOrEmpty(clientId) && !string.IsNullOrEmpty(clientSecret) && !string.IsNullOrEmpty(tenantId))
+    {
+        credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+    }
+    else
+    {
+        // Cloud scenario: chain Managed Identity (Azure) -> AzureCli/VS (dev fallback)
+        credential = new ChainedTokenCredential(
+            new ManagedIdentityCredential(new ManagedIdentityCredentialOptions()),
+            new AzureCliCredential(),
+            new VisualStudioCredential());
+    }
+
     return new GraphServiceClient(credential, new[] { "https://graph.microsoft.com/.default" });
 });
 

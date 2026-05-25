@@ -1,5 +1,4 @@
 using Microsoft.Graph;
-using Microsoft.Graph.Models;
 using Microsoft.Kiota.Abstractions;
 using IntuneAssignmentViewer.Models;
 using System.Text.Json;
@@ -11,6 +10,17 @@ public class IntuneService : IIntuneService
     private readonly GraphServiceClient _graphClient;
     private readonly ILogger<IntuneService> _logger;
 
+    // Endpoint Security template families found in configurationPolicies.templateReference.templateFamily
+    private static readonly Dictionary<string, string> EndpointSecurityFamilies = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "endpointSecurityAntivirus", "Antivirus" },
+        { "endpointSecurityDiskEncryption", "Disk Encryption" },
+        { "endpointSecurityFirewall", "Firewall" },
+        { "endpointSecurityEndpointDetectionAndResponse", "EDR" },
+        { "endpointSecurityAttackSurfaceReduction", "Attack Surface Reduction" },
+        { "endpointSecurityAccountProtection", "Account Protection" }
+    };
+
     public IntuneService(GraphServiceClient graphClient, ILogger<IntuneService> logger)
     {
         _graphClient = graphClient;
@@ -20,7 +30,6 @@ public class IntuneService : IIntuneService
     public async Task<List<GroupInfo>> SearchGroupsAsync(string searchTerm)
     {
         var groups = new List<GroupInfo>();
-
         try
         {
             var result = await _graphClient.Groups.GetAsync(config =>
@@ -44,342 +53,611 @@ public class IntuneService : IIntuneService
         {
             _logger.LogError(ex, "Error searching groups with term: {SearchTerm}", searchTerm);
         }
-
         return groups;
     }
 
     public async Task<List<IntuneAssignment>> GetAssignmentsForGroupAsync(string groupId, PolicyType? filterType = null)
     {
         var assignments = new List<IntuneAssignment>();
+        var tasks = new List<Task>();
+
+        if (filterType is null or PolicyType.Configuration)
+        {
+            tasks.Add(GetDeviceConfigurationsAsync(groupId, assignments));
+            tasks.Add(GetSettingsCatalogAsync(groupId, assignments));
+        }
+        if (filterType is null or PolicyType.AdministrativeTemplate)
+            tasks.Add(GetAdministrativeTemplatesAsync(groupId, assignments));
+        if (filterType is null or PolicyType.Compliance)
+            tasks.Add(GetCompliancePoliciesAsync(groupId, assignments));
+        if (filterType is null or PolicyType.Application)
+            tasks.Add(GetMobileAppsAsync(groupId, assignments));
+        if (filterType is null or PolicyType.AppProtection)
+            tasks.Add(GetAppProtectionPoliciesAsync(groupId, assignments));
+        if (filterType is null or PolicyType.AppConfiguration)
+            tasks.Add(GetAppConfigurationPoliciesAsync(groupId, assignments));
+        if (filterType is null or PolicyType.EndpointSecurity)
+            tasks.Add(GetEndpointSecurityIntentsAsync(groupId, assignments));
+        if (filterType is null or PolicyType.Script)
+        {
+            tasks.Add(GetDeviceScriptsAsync(groupId, assignments));
+            tasks.Add(GetShellScriptsAsync(groupId, assignments));
+            tasks.Add(GetHealthScriptsAsync(groupId, assignments));
+        }
+        if (filterType is null or PolicyType.Provisioning)
+        {
+            tasks.Add(GetAutopilotProfilesAsync(groupId, assignments));
+            tasks.Add(GetEnrollmentStatusPageAsync(groupId, assignments));
+            tasks.Add(GetCloudPcProvisioningPoliciesAsync(groupId, assignments));
+            tasks.Add(GetCloudPcUserSettingsAsync(groupId, assignments));
+        }
 
         try
         {
-            if (filterType == null || filterType == PolicyType.Configuration)
-            {
-                await GetDeviceConfigurationAssignmentsAsync(groupId, assignments);
-                await GetConfigurationPolicyAssignmentsAsync(groupId, assignments);
-            }
-
-            if (filterType == null || filterType == PolicyType.Compliance)
-            {
-                await GetCompliancePolicyAssignmentsAsync(groupId, assignments);
-            }
-
-            if (filterType == null || filterType == PolicyType.Application)
-            {
-                await GetApplicationAssignmentsAsync(groupId, assignments);
-            }
+            await Task.WhenAll(tasks);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error retrieving assignments for group: {GroupId}", groupId);
         }
 
-        return assignments.OrderBy(a => a.PolicyType).ThenBy(a => a.PolicyName).ToList();
+        return assignments
+            .OrderBy(a => a.PolicyType)
+            .ThenBy(a => a.PolicyName)
+            .ToList();
     }
 
-    private async Task GetDeviceConfigurationAssignmentsAsync(string groupId, List<IntuneAssignment> assignments)
+    // ---------- Helpers ----------
+
+    private async IAsyncEnumerable<JsonElement> EnumerateBetaAsync(string initialUrl)
+    {
+        var nextUrl = initialUrl;
+        while (!string.IsNullOrEmpty(nextUrl))
+        {
+            Stream? response;
+            try
+            {
+                var reqInfo = new RequestInformation { HttpMethod = Method.GET, UrlTemplate = nextUrl };
+                response = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(reqInfo);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error fetching: {Url}", nextUrl);
+                yield break;
+            }
+
+            if (response == null) yield break;
+
+            using var doc = await JsonDocument.ParseAsync(response);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("value", out var arr))
+            {
+                foreach (var item in arr.EnumerateArray())
+                    yield return item.Clone();
+            }
+
+            nextUrl = root.TryGetProperty("@odata.nextLink", out var nl) ? nl.GetString() : null;
+        }
+    }
+
+    private async Task<JsonElement?> GetBetaAsync(string url)
     {
         try
         {
-            var configs = await _graphClient.DeviceManagement.DeviceConfigurations.GetAsync(config =>
+            var reqInfo = new RequestInformation { HttpMethod = Method.GET, UrlTemplate = url };
+            var response = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(reqInfo);
+            if (response == null) return null;
+            using var doc = await JsonDocument.ParseAsync(response);
+            return doc.RootElement.Clone();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error fetching: {Url}", url);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Standard pattern: iterate the /assignments collection looking for a target with the matching groupId.
+    /// Returns intent string (Include/Exclude or app intent like Required/Available/Uninstall) if matched.
+    /// </summary>
+    private async Task<string?> FindGroupAssignmentAsync(string assignmentsUrl, string groupId)
+    {
+        var root = await GetBetaAsync(assignmentsUrl);
+        if (root is null || !root.Value.TryGetProperty("value", out var arr)) return null;
+
+        foreach (var a in arr.EnumerateArray())
+        {
+            if (!a.TryGetProperty("target", out var target)) continue;
+            if (!target.TryGetProperty("groupId", out var gId)) continue;
+            if (!string.Equals(gId.GetString(), groupId, StringComparison.OrdinalIgnoreCase)) continue;
+
+            var odataType = target.TryGetProperty("@odata.type", out var ot) ? ot.GetString() ?? "" : "";
+            var isExclusion = odataType.Contains("exclusion", StringComparison.OrdinalIgnoreCase);
+
+            // Check for app intent (required/available/uninstall) on the assignment itself
+            if (a.TryGetProperty("intent", out var intentEl) && intentEl.ValueKind == JsonValueKind.String)
             {
-                config.QueryParameters.Top = 100;
-                config.QueryParameters.Select = new[] { "id", "displayName", "description" };
+                var intentVal = intentEl.GetString();
+                if (!string.IsNullOrEmpty(intentVal))
+                    return char.ToUpper(intentVal[0]) + intentVal[1..];
+            }
+            return isExclusion ? "Exclude" : "Include";
+        }
+        return null;
+    }
+
+    private static string GetStr(JsonElement el, string prop)
+        => el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+
+    private static bool GetBool(JsonElement el, string prop)
+        => el.TryGetProperty(prop, out var v) && (v.ValueKind == JsonValueKind.True);
+
+    private static string GetSubTypeFromOdata(string odataType)
+    {
+        if (string.IsNullOrEmpty(odataType)) return "Unknown";
+        var name = odataType.Replace("#microsoft.graph.", "").Trim();
+        if (string.IsNullOrEmpty(name)) return "Unknown";
+        var sb = new System.Text.StringBuilder();
+        sb.Append(char.ToUpper(name[0]));
+        for (int i = 1; i < name.Length; i++)
+        {
+            if (char.IsUpper(name[i]) && !char.IsUpper(name[i - 1]))
+                sb.Append(' ');
+            sb.Append(name[i]);
+        }
+        return sb.ToString();
+    }
+
+    private static string PlatformFromOdata(string odataType)
+    {
+        if (string.IsNullOrEmpty(odataType)) return "";
+        var lower = odataType.ToLowerInvariant();
+        if (lower.Contains("windows")) return "Windows";
+        if (lower.Contains("ios")) return "iOS";
+        if (lower.Contains("macos") || lower.Contains("osx")) return "macOS";
+        if (lower.Contains("android")) return "Android";
+        return "";
+    }
+
+    private static string PlatformFromString(string platform)
+    {
+        if (string.IsNullOrEmpty(platform)) return "";
+        var lower = platform.ToLowerInvariant();
+        if (lower.Contains("windows")) return "Windows";
+        if (lower.Contains("ios")) return "iOS";
+        if (lower.Contains("macos")) return "macOS";
+        if (lower.Contains("android")) return "Android";
+        return char.ToUpper(platform[0]) + platform[1..];
+    }
+
+    // ---------- Legacy Device Configurations ----------
+
+    private async Task GetDeviceConfigurationsAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var policy in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?$top=100&$select=id,displayName,description,@odata.type"))
+        {
+            var pid = GetStr(policy, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations('{pid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            var odata = GetStr(policy, "@odata.type");
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = pid,
+                PolicyName = GetStr(policy, "displayName"),
+                PolicyType = PolicyType.Configuration,
+                PolicySubType = GetSubTypeFromOdata(odata),
+                Platform = PlatformFromOdata(odata),
+                Description = GetStr(policy, "description"),
+                AssignmentIntent = intent
             });
-
-            while (configs?.Value != null)
-            {
-                foreach (var policy in configs.Value)
-                {
-                    var policyAssignments = await _graphClient.DeviceManagement
-                        .DeviceConfigurations[policy.Id]
-                        .Assignments.GetAsync();
-
-                    if (policyAssignments?.Value == null) continue;
-
-                    var matchingAssignment = policyAssignments.Value
-                        .FirstOrDefault(a => IsTargetedToGroup(a.Target, groupId));
-
-                    if (matchingAssignment != null)
-                    {
-                        assignments.Add(new IntuneAssignment
-                        {
-                            PolicyId = policy.Id ?? string.Empty,
-                            PolicyName = policy.DisplayName ?? "Unknown",
-                            PolicyType = PolicyType.Configuration,
-                            Description = policy.Description ?? string.Empty,
-                            AssignmentIntent = GetAssignmentIntent(matchingAssignment.Target)
-                        });
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(configs.OdataNextLink))
-                {
-                    configs = await _graphClient.DeviceManagement.DeviceConfigurations
-                        .WithUrl(configs.OdataNextLink)
-                        .GetAsync();
-                }
-                else
-                {
-                    break;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Error fetching device configuration assignments");
         }
     }
 
-    private async Task GetConfigurationPolicyAssignmentsAsync(string groupId, List<IntuneAssignment> assignments)
+    // ---------- Settings Catalog (also handles Endpoint Security via templateReference) ----------
+
+    private async Task GetSettingsCatalogAsync(string groupId, List<IntuneAssignment> assignments)
     {
-        try
+        await foreach (var policy in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?$top=100"))
         {
-            // Settings Catalog policies (configurationPolicies) - use raw request via Graph SDK
-            var nextUrl = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?$top=100&$select=id,name,description";
+            var pid = GetStr(policy, "id");
+            var platforms = GetStr(policy, "platforms");
 
-            while (!string.IsNullOrEmpty(nextUrl))
+            // Determine if this policy belongs to Endpoint Security
+            string? esFamily = null;
+            if (policy.TryGetProperty("templateReference", out var tr) && tr.ValueKind == JsonValueKind.Object)
             {
-                var requestInfo = new RequestInformation
-                {
-                    HttpMethod = Method.GET,
-                    UrlTemplate = nextUrl
-                };
-
-                var response = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(requestInfo);
-                if (response == null) break;
-
-                using var doc = await JsonDocument.ParseAsync(response);
-                var root = doc.RootElement;
-
-                if (!root.TryGetProperty("value", out var policiesArray)) break;
-
-                foreach (var policy in policiesArray.EnumerateArray())
-                {
-                    var policyId = policy.GetProperty("id").GetString();
-                    var policyName = policy.TryGetProperty("name", out var nameEl) ? nameEl.GetString() : "Unknown";
-                    var description = policy.TryGetProperty("description", out var descEl) ? descEl.GetString() : "";
-
-                    // Get assignments for this policy
-                    var assignUrl = $"https://graph.microsoft.com/beta/deviceManagement/configurationPolicies('{policyId}')/assignments";
-                    var assignRequestInfo = new RequestInformation
-                    {
-                        HttpMethod = Method.GET,
-                        UrlTemplate = assignUrl
-                    };
-
-                    var assignResponse = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(assignRequestInfo);
-                    if (assignResponse == null) continue;
-
-                    using var assignDoc = await JsonDocument.ParseAsync(assignResponse);
-                    var assignRoot = assignDoc.RootElement;
-
-                    if (!assignRoot.TryGetProperty("value", out var assignmentsArray)) continue;
-
-                    foreach (var assign in assignmentsArray.EnumerateArray())
-                    {
-                        if (!assign.TryGetProperty("target", out var target)) continue;
-                        if (!target.TryGetProperty("groupId", out var gId)) continue;
-
-                        if (string.Equals(gId.GetString(), groupId, StringComparison.OrdinalIgnoreCase))
-                        {
-                            var intent = target.TryGetProperty("@odata.type", out var odataType)
-                                ? (odataType.GetString()?.Contains("exclusion") == true ? "Exclude" : "Include")
-                                : "Include";
-
-                            assignments.Add(new IntuneAssignment
-                            {
-                                PolicyId = policyId ?? string.Empty,
-                                PolicyName = policyName ?? "Unknown",
-                                PolicyType = PolicyType.Configuration,
-                                Description = description ?? string.Empty,
-                                AssignmentIntent = intent
-                            });
-                            break;
-                        }
-                    }
-                }
-
-                // Handle pagination
-                nextUrl = root.TryGetProperty("@odata.nextLink", out var nextLinkEl) 
-                    ? nextLinkEl.GetString() 
-                    : null;
+                var family = GetStr(tr, "templateFamily");
+                if (!string.IsNullOrEmpty(family) && EndpointSecurityFamilies.TryGetValue(family, out var friendly))
+                    esFamily = friendly;
             }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Error fetching Settings Catalog policy assignments");
-        }
-    }
 
-    private async Task GetCompliancePolicyAssignmentsAsync(string groupId, List<IntuneAssignment> assignments)
-    {
-        try
-        {
-            var policies = await _graphClient.DeviceManagement.DeviceCompliancePolicies.GetAsync(config =>
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/configurationPolicies('{pid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            assignments.Add(new IntuneAssignment
             {
-                config.QueryParameters.Top = 100;
-                config.QueryParameters.Select = new[] { "id", "displayName", "description" };
+                PolicyId = pid,
+                PolicyName = GetStr(policy, "name"),
+                PolicyType = esFamily != null ? PolicyType.EndpointSecurity : PolicyType.Configuration,
+                PolicySubType = esFamily ?? "Settings Catalog",
+                Platform = PlatformFromString(platforms),
+                Description = GetStr(policy, "description"),
+                AssignmentIntent = intent
             });
+        }
+    }
 
-            while (policies?.Value != null)
+    // ---------- Administrative Templates (ADMX) ----------
+
+    private async Task GetAdministrativeTemplatesAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var policy in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/groupPolicyConfigurations?$top=100&$select=id,displayName,description"))
+        {
+            var pid = GetStr(policy, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/groupPolicyConfigurations('{pid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            assignments.Add(new IntuneAssignment
             {
-                foreach (var policy in policies.Value)
-                {
-                    var policyAssignments = await _graphClient.DeviceManagement
-                        .DeviceCompliancePolicies[policy.Id]
-                        .Assignments.GetAsync();
-
-                    if (policyAssignments?.Value == null) continue;
-
-                    var matchingAssignment = policyAssignments.Value
-                        .FirstOrDefault(a => IsTargetedToGroup(a.Target, groupId));
-
-                    if (matchingAssignment != null)
-                    {
-                        assignments.Add(new IntuneAssignment
-                        {
-                            PolicyId = policy.Id ?? string.Empty,
-                            PolicyName = policy.DisplayName ?? "Unknown",
-                            PolicyType = PolicyType.Compliance,
-                            Description = policy.Description ?? string.Empty,
-                            AssignmentIntent = GetAssignmentIntent(matchingAssignment.Target)
-                        });
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(policies.OdataNextLink))
-                {
-                    policies = await _graphClient.DeviceManagement.DeviceCompliancePolicies
-                        .WithUrl(policies.OdataNextLink)
-                        .GetAsync();
-                }
-                else
-                {
-                    break;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Error fetching compliance policy assignments");
+                PolicyId = pid,
+                PolicyName = GetStr(policy, "displayName"),
+                PolicyType = PolicyType.AdministrativeTemplate,
+                PolicySubType = "ADMX Template",
+                Platform = "Windows",
+                Description = GetStr(policy, "description"),
+                AssignmentIntent = intent
+            });
         }
     }
 
-    private async Task GetApplicationAssignmentsAsync(string groupId, List<IntuneAssignment> assignments)
-    {
-        try
-        {
-            // Use beta endpoint to get all app types (Win32, LOB, Store, etc.)
-            var nextUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?$top=100&$select=id,displayName,description&$filter=isAssigned eq true";
+    // ---------- Compliance ----------
 
-            while (!string.IsNullOrEmpty(nextUrl))
+    private async Task GetCompliancePoliciesAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var policy in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies?$top=100&$select=id,displayName,description,@odata.type"))
+        {
+            var pid = GetStr(policy, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies('{pid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            var odata = GetStr(policy, "@odata.type");
+            assignments.Add(new IntuneAssignment
             {
-                var requestInfo = new RequestInformation
-                {
-                    HttpMethod = Method.GET,
-                    UrlTemplate = nextUrl
-                };
-
-                var response = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(requestInfo);
-                if (response == null) break;
-
-                using var doc = await JsonDocument.ParseAsync(response);
-                var root = doc.RootElement;
-
-                if (!root.TryGetProperty("value", out var appsArray)) break;
-
-                foreach (var app in appsArray.EnumerateArray())
-                {
-                    var appId = app.GetProperty("id").GetString();
-                    var appName = app.TryGetProperty("displayName", out var nameEl) ? nameEl.GetString() : "Unknown";
-                    var description = app.TryGetProperty("description", out var descEl) ? descEl.GetString() : "";
-
-                    // Get assignments for this app
-                    var assignUrl = $"https://graph.microsoft.com/beta/deviceAppManagement/mobileApps('{appId}')/assignments";
-                    var assignRequestInfo = new RequestInformation
-                    {
-                        HttpMethod = Method.GET,
-                        UrlTemplate = assignUrl
-                    };
-
-                    var assignResponse = await _graphClient.RequestAdapter.SendPrimitiveAsync<Stream>(assignRequestInfo);
-                    if (assignResponse == null) continue;
-
-                    using var assignDoc = await JsonDocument.ParseAsync(assignResponse);
-                    var assignRoot = assignDoc.RootElement;
-
-                    if (!assignRoot.TryGetProperty("value", out var assignmentsArray)) continue;
-
-                    foreach (var assign in assignmentsArray.EnumerateArray())
-                    {
-                        if (!assign.TryGetProperty("target", out var target)) continue;
-                        if (!target.TryGetProperty("groupId", out var gId)) continue;
-
-                        if (string.Equals(gId.GetString(), groupId, StringComparison.OrdinalIgnoreCase))
-                        {
-                            var intent = "Include";
-                            if (target.TryGetProperty("@odata.type", out var odataType))
-                            {
-                                intent = odataType.GetString()?.Contains("exclusion") == true ? "Exclude" : "Include";
-                            }
-                            // Also check the assignment intent property
-                            if (assign.TryGetProperty("intent", out var intentEl))
-                            {
-                                var intentVal = intentEl.GetString();
-                                if (!string.IsNullOrEmpty(intentVal))
-                                {
-                                    intent = intentVal;
-                                }
-                            }
-
-                            assignments.Add(new IntuneAssignment
-                            {
-                                PolicyId = appId ?? string.Empty,
-                                PolicyName = appName ?? "Unknown",
-                                PolicyType = PolicyType.Application,
-                                Description = description ?? string.Empty,
-                                AssignmentIntent = intent
-                            });
-                            break;
-                        }
-                    }
-                }
-
-                // Handle pagination
-                nextUrl = root.TryGetProperty("@odata.nextLink", out var nextLinkEl) 
-                    ? nextLinkEl.GetString() 
-                    : null;
-            }
+                PolicyId = pid,
+                PolicyName = GetStr(policy, "displayName"),
+                PolicyType = PolicyType.Compliance,
+                PolicySubType = GetSubTypeFromOdata(odata),
+                Platform = PlatformFromOdata(odata),
+                Description = GetStr(policy, "description"),
+                AssignmentIntent = intent
+            });
         }
-        catch (Exception ex)
+    }
+
+    // ---------- Mobile Apps ----------
+
+    private async Task GetMobileAppsAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var app in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?$top=100&$select=id,displayName,description,@odata.type,isFeatured,isAssigned&$filter=isAssigned eq true"))
         {
-            _logger.LogWarning(ex, "Error fetching application assignments");
+            // Skip built-in/featured apps (system noise)
+            if (GetBool(app, "isFeatured")) continue;
+
+            var aid = GetStr(app, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceAppManagement/mobileApps('{aid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            var odata = GetStr(app, "@odata.type");
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = aid,
+                PolicyName = GetStr(app, "displayName"),
+                PolicyType = PolicyType.Application,
+                PolicySubType = GetSubTypeFromOdata(odata),
+                Platform = PlatformFromOdata(odata),
+                Description = GetStr(app, "description"),
+                AssignmentIntent = intent
+            });
         }
     }
 
-    private static bool IsTargetedToGroup(DeviceAndAppManagementAssignmentTarget? target, string groupId)
+    // ---------- App Protection Policies ----------
+
+    private async Task GetAppProtectionPoliciesAsync(string groupId, List<IntuneAssignment> assignments)
     {
-        if (target is GroupAssignmentTarget groupTarget)
-            return string.Equals(groupTarget.GroupId, groupId, StringComparison.OrdinalIgnoreCase);
+        await foreach (var policy in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceAppManagement/managedAppPolicies?$top=100"))
+        {
+            var pid = GetStr(policy, "id");
+            var odata = GetStr(policy, "@odata.type");
+            string? resourcePath = odata switch
+            {
+                _ when odata.Contains("iosManagedAppProtection") => "iosManagedAppProtections",
+                _ when odata.Contains("androidManagedAppProtection") => "androidManagedAppProtections",
+                _ when odata.Contains("windowsManagedAppProtection") => "windowsManagedAppProtections",
+                _ when odata.Contains("mdmWindowsInformationProtection") => "mdmWindowsInformationProtectionPolicies",
+                _ when odata.Contains("windowsInformationProtection") => "windowsInformationProtectionPolicies",
+                _ => null
+            };
+            if (resourcePath == null) continue;
 
-        if (target is ExclusionGroupAssignmentTarget exclusionTarget)
-            return string.Equals(exclusionTarget.GroupId, groupId, StringComparison.OrdinalIgnoreCase);
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceAppManagement/{resourcePath}('{pid}')/assignments", groupId);
+            if (intent == null) continue;
 
-        return false;
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = pid,
+                PolicyName = GetStr(policy, "displayName"),
+                PolicyType = PolicyType.AppProtection,
+                PolicySubType = GetSubTypeFromOdata(odata),
+                Platform = PlatformFromOdata(odata),
+                Description = GetStr(policy, "description"),
+                AssignmentIntent = intent
+            });
+        }
     }
 
-    private static string GetAssignmentIntent(DeviceAndAppManagementAssignmentTarget? target)
+    // ---------- App Configuration Policies ----------
+
+    private async Task GetAppConfigurationPoliciesAsync(string groupId, List<IntuneAssignment> assignments)
     {
-        if (target is ExclusionGroupAssignmentTarget)
-            return "Exclude";
-        if (target is GroupAssignmentTarget)
-            return "Include";
-        if (target is AllDevicesAssignmentTarget)
-            return "All Devices";
-        if (target is AllLicensedUsersAssignmentTarget)
-            return "All Users";
-        return "Unknown";
+        await foreach (var policy in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceAppManagement/mobileAppConfigurations?$top=100&$select=id,displayName,description,@odata.type"))
+        {
+            var pid = GetStr(policy, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceAppManagement/mobileAppConfigurations('{pid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            var odata = GetStr(policy, "@odata.type");
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = pid,
+                PolicyName = GetStr(policy, "displayName"),
+                PolicyType = PolicyType.AppConfiguration,
+                PolicySubType = "Managed Device " + GetSubTypeFromOdata(odata),
+                Platform = PlatformFromOdata(odata),
+                Description = GetStr(policy, "description"),
+                AssignmentIntent = intent
+            });
+        }
+
+        await foreach (var policy in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceAppManagement/targetedManagedAppConfigurations?$top=100&$select=id,displayName,description"))
+        {
+            var pid = GetStr(policy, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceAppManagement/targetedManagedAppConfigurations('{pid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = pid,
+                PolicyName = GetStr(policy, "displayName"),
+                PolicyType = PolicyType.AppConfiguration,
+                PolicySubType = "Managed App Config",
+                Platform = "",
+                Description = GetStr(policy, "description"),
+                AssignmentIntent = intent
+            });
+        }
+    }
+
+    // ---------- Endpoint Security Intents (Template-style) ----------
+
+    private async Task GetEndpointSecurityIntentsAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var intent in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/intents?$top=100&$select=id,displayName,description,templateId"))
+        {
+            var iid = GetStr(intent, "id");
+            var assignIntent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/intents('{iid}')/assignments", groupId);
+            if (assignIntent == null) continue;
+
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = iid,
+                PolicyName = GetStr(intent, "displayName"),
+                PolicyType = PolicyType.EndpointSecurity,
+                PolicySubType = "Security Intent",
+                Platform = "",
+                Description = GetStr(intent, "description"),
+                AssignmentIntent = assignIntent
+            });
+        }
+    }
+
+    // ---------- Device Management Scripts (PowerShell - Windows) ----------
+
+    private async Task GetDeviceScriptsAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var script in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/deviceManagementScripts?$top=100&$select=id,displayName,description"))
+        {
+            var sid = GetStr(script, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/deviceManagementScripts('{sid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = sid,
+                PolicyName = GetStr(script, "displayName"),
+                PolicyType = PolicyType.Script,
+                PolicySubType = "PowerShell Script",
+                Platform = "Windows",
+                Description = GetStr(script, "description"),
+                AssignmentIntent = intent
+            });
+        }
+    }
+
+    // ---------- Device Shell Scripts (macOS) ----------
+
+    private async Task GetShellScriptsAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var script in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/deviceShellScripts?$top=100&$select=id,displayName,description"))
+        {
+            var sid = GetStr(script, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/deviceShellScripts('{sid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = sid,
+                PolicyName = GetStr(script, "displayName"),
+                PolicyType = PolicyType.Script,
+                PolicySubType = "Shell Script",
+                Platform = "macOS",
+                Description = GetStr(script, "description"),
+                AssignmentIntent = intent
+            });
+        }
+    }
+
+    // ---------- Proactive Remediations (Device Health Scripts) ----------
+
+    private async Task GetHealthScriptsAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var script in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/deviceHealthScripts?$top=100&$select=id,displayName,description"))
+        {
+            var sid = GetStr(script, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/deviceHealthScripts('{sid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = sid,
+                PolicyName = GetStr(script, "displayName"),
+                PolicyType = PolicyType.Script,
+                PolicySubType = "Proactive Remediation",
+                Platform = "Windows",
+                Description = GetStr(script, "description"),
+                AssignmentIntent = intent
+            });
+        }
+    }
+
+    // ---------- Autopilot Deployment Profiles ----------
+
+    private async Task GetAutopilotProfilesAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var p in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/windowsAutopilotDeploymentProfiles?$top=100&$select=id,displayName,description"))
+        {
+            var pid = GetStr(p, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/windowsAutopilotDeploymentProfiles('{pid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = pid,
+                PolicyName = GetStr(p, "displayName"),
+                PolicyType = PolicyType.Provisioning,
+                PolicySubType = "Autopilot Profile",
+                Platform = "Windows",
+                Description = GetStr(p, "description"),
+                AssignmentIntent = intent
+            });
+        }
+    }
+
+    // ---------- Enrollment Status Page ----------
+
+    private async Task GetEnrollmentStatusPageAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var p in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/deviceEnrollmentConfigurations?$top=100"))
+        {
+            var odata = GetStr(p, "@odata.type");
+            if (!odata.Contains("EnrollmentCompletionPageConfiguration", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var pid = GetStr(p, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/deviceEnrollmentConfigurations('{pid}')/assignments", groupId);
+            if (intent == null) continue;
+
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = pid,
+                PolicyName = GetStr(p, "displayName"),
+                PolicyType = PolicyType.Provisioning,
+                PolicySubType = "Enrollment Status Page",
+                Platform = "Windows",
+                Description = GetStr(p, "description"),
+                AssignmentIntent = intent
+            });
+        }
+    }
+
+    // ---------- Windows 365 Cloud PC Provisioning Policies ----------
+
+    private async Task GetCloudPcProvisioningPoliciesAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var p in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/virtualEndpoint/provisioningPolicies?$top=100"))
+        {
+            var pid = GetStr(p, "id");
+            // Cloud PC uses /id/assignments (no parentheses)
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/virtualEndpoint/provisioningPolicies/{pid}/assignments", groupId);
+            if (intent == null) continue;
+
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = pid,
+                PolicyName = GetStr(p, "displayName"),
+                PolicyType = PolicyType.Provisioning,
+                PolicySubType = "Cloud PC Provisioning",
+                Platform = "Windows 365",
+                Description = GetStr(p, "description"),
+                AssignmentIntent = intent
+            });
+        }
+    }
+
+    // ---------- Windows 365 Cloud PC User Settings ----------
+
+    private async Task GetCloudPcUserSettingsAsync(string groupId, List<IntuneAssignment> assignments)
+    {
+        await foreach (var p in EnumerateBetaAsync(
+            "https://graph.microsoft.com/beta/deviceManagement/virtualEndpoint/userSettings?$top=100"))
+        {
+            var pid = GetStr(p, "id");
+            var intent = await FindGroupAssignmentAsync(
+                $"https://graph.microsoft.com/beta/deviceManagement/virtualEndpoint/userSettings/{pid}/assignments", groupId);
+            if (intent == null) continue;
+
+            assignments.Add(new IntuneAssignment
+            {
+                PolicyId = pid,
+                PolicyName = GetStr(p, "displayName"),
+                PolicyType = PolicyType.Provisioning,
+                PolicySubType = "Cloud PC User Settings",
+                Platform = "Windows 365",
+                Description = GetStr(p, "description"),
+                AssignmentIntent = intent
+            });
+        }
     }
 }

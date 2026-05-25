@@ -1,0 +1,164 @@
+/* ===== Splash / Sign-in page ===== */
+.splash-container {
+    min-height: calc(100vh - 200px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+    background:
+        radial-gradient(circle at 20% 30%, rgba(0, 120, 212, 0.08), transparent 50%),
+        radial-gradient(circle at 80% 70%, rgba(92, 45, 145, 0.08), transparent 50%);
+}
+
+.splash-card {
+    background: white;
+    border-radius: 20px;
+    padding: 3rem 2.5rem;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06);
+    max-width: 540px;
+    width: 100%;
+    text-align: center;
+}
+
+.splash-logo {
+    margin-bottom: 1.5rem;
+}
+
+.splash-logo img {
+    max-width: 220px;
+    height: auto;
+}
+
+.splash-title {
+    font-size: 1.8rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #0078d4, #5c2d91);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.5rem;
+}
+
+.splash-tagline {
+    color: #5a5a5a;
+    font-size: 1rem;
+    margin-bottom: 2rem;
+}
+
+.splash-features {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.6rem;
+    margin-bottom: 2rem;
+    text-align: left;
+}
+
+.splash-feature {
+    background: #f8f9fa;
+    padding: 0.6rem 0.85rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    color: #333;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.splash-feature span {
+    font-size: 1.1rem;
+}
+
+.splash-signin-btn {
+    padding: 0.75rem 2rem;
+    border-radius: 8px;
+    font-weight: 600;
+    background: linear-gradient(135deg, #0078d4, #5c2d91);
+    border: none;
+    box-shadow: 0 4px 12px rgba(0, 120, 212, 0.3);
+}
+
+.splash-signin-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(0, 120, 212, 0.4);
+}
+
+.ms-logo {
+    font-size: 1.2rem;
+    margin-right: 0.5rem;
+}
+
+.splash-footer-note {
+    color: #888;
+    font-size: 0.8rem;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+}
+
+/* ===== Authenticated Home hero ===== */
+.home-hero {
+    text-align: center;
+    padding: 3rem 1rem 2rem;
+}
+
+.hero-icon {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+}
+
+.home-hero h1 {
+    background: linear-gradient(135deg, #0078d4, #5c2d91);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 700;
+}
+
+.home-hero .lead {
+    color: #555;
+    max-width: 640px;
+    margin: 1rem auto;
+}
+
+.feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 1rem;
+    margin-top: 2rem;
+}
+
+.feature-card {
+    background: white;
+    border-radius: 12px;
+    padding: 1.25rem;
+    border: 1px solid #e8e8e8;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+    text-align: center;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.feature-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+}
+
+.feature-icon {
+    font-size: 2.2rem;
+    margin-bottom: 0.5rem;
+}
+
+.feature-card h5 {
+    margin-bottom: 0.5rem;
+    color: #1a1a1a;
+}
+
+.feature-card p {
+    color: #666;
+    font-size: 0.85rem;
+    margin-bottom: 0;
+}
+
+@media (max-width: 600px) {
+    .splash-features {
+        grid-template-columns: 1fr;
+    }
+}
