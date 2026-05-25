@@ -2,28 +2,37 @@
 @inject IOptions<BrandingSettings> BrandingOptions
 
 <div class="page">
-    <div class="sidebar">
-        <NavMenu />
-    </div>
-
-    <main>
-        <div class="top-row px-4 d-flex justify-content-between align-items-center">
-            <div class="d-flex align-items-center gap-2">
-                <img src="@BrandingOptions.Value.LogoPath" alt="Logo" class="company-logo" onerror="this.style.display='none'" />
-                <span class="fw-semibold">@BrandingOptions.Value.AppTitle</span>
+    <header class="top-navbar">
+        <div class="container-fluid d-flex align-items-center justify-content-between">
+            <div class="d-flex align-items-center gap-3">
+                <a href="/" class="navbar-brand-link">
+                    <img src="@BrandingOptions.Value.LogoPath" alt="Logo" class="company-logo" onerror="this.style.display='none'" />
+                </a>
+                <nav class="nav-links">
+                    <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                        <span class="nav-icon">🏠</span> Home
+                    </NavLink>
+                    <NavLink class="nav-link" href="assignments">
+                        <span class="nav-icon">📋</span> Assignments
+                    </NavLink>
+                </nav>
             </div>
-            <AuthorizeView>
-                <Authorized>
-                    <span class="text-muted me-2">@context.User.Identity?.Name</span>
-                    <a href="MicrosoftIdentity/Account/SignOut" class="btn btn-outline-secondary btn-sm">Sign Out</a>
-                </Authorized>
-                <NotAuthorized>
-                    <a href="MicrosoftIdentity/Account/SignIn" class="btn btn-primary btn-sm">Sign In</a>
-                </NotAuthorized>
-            </AuthorizeView>
+            <div class="d-flex align-items-center gap-3">
+                <AuthorizeView>
+                    <Authorized>
+                        <span class="user-name">@context.User.Identity?.Name</span>
+                        <a href="MicrosoftIdentity/Account/SignOut" class="btn btn-outline-light btn-sm">Sign Out</a>
+                    </Authorized>
+                    <NotAuthorized>
+                        <a href="MicrosoftIdentity/Account/SignIn" class="btn btn-light btn-sm">Sign In</a>
+                    </NotAuthorized>
+                </AuthorizeView>
+            </div>
         </div>
+    </header>
 
-        <article class="content px-4">
+    <main class="main-content">
+        <article class="content px-4 py-3">
             @Body
         </article>
     </main>

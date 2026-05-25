@@ -1,121 +1,133 @@
 @page "/assignments"
 @rendermode InteractiveServer
+@implements IDisposable
 @inject IIntuneService IntuneService
 @inject IConfiguration Configuration
 @attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "RequireIntuneRole")]
 
 <PageTitle>Intune Assignments</PageTitle>
 
-<h2>Intune Assignment Viewer</h2>
+<div class="assignments-container">
+    <h2 class="mb-4">📋 Intune Assignment Viewer</h2>
 
-<div class="row mb-4">
-    <div class="col-md-6">
-        <label class="form-label fw-semibold">Search Entra ID Group</label>
-        <div class="input-group">
-            <input type="text" class="form-control" placeholder="Enter group name..."
-                   @bind="searchTerm" @bind:event="oninput" @onkeydown="HandleKeyDown" />
-            <button class="btn btn-primary" @onclick="SearchGroups" disabled="@isSearching">
+    @if (selectedGroup == null)
+    {
+        <div class="search-section">
+            <label class="form-label fw-semibold">Search Entra ID Group</label>
+            <div class="position-relative">
+                <input type="text" class="form-control form-control-lg search-input" 
+                       placeholder="Start typing a group name..."
+                       @bind="searchTerm" @bind:event="oninput" @bind:after="OnSearchInput" />
                 @if (isSearching)
                 {
-                    <span class="spinner-border spinner-border-sm me-1"></span>
-                }
-                Search
-            </button>
-        </div>
-    </div>
-</div>
-
-@if (groups.Any())
-{
-    <div class="row mb-4">
-        <div class="col-md-6">
-            <label class="form-label fw-semibold">Select Group</label>
-            <div class="list-group">
-                @foreach (var group in groups)
-                {
-                    <button class="list-group-item list-group-item-action @(selectedGroup?.Id == group.Id ? "active" : "")"
-                            @onclick="() => SelectGroup(group)">
-                        <div class="fw-semibold">@group.DisplayName</div>
-                        @if (!string.IsNullOrEmpty(group.Description))
-                        {
-                            <small class="text-muted">@group.Description</small>
-                        }
-                    </button>
+                    <div class="search-spinner">
+                        <div class="spinner-border spinner-border-sm text-primary"></div>
+                    </div>
                 }
             </div>
-        </div>
-    </div>
-}
 
-@if (selectedGroup != null)
-{
-    <div class="row mb-3">
-        <div class="col-12">
-            <h4>Assignments for: <span class="text-primary">@selectedGroup.DisplayName</span></h4>
-        </div>
-    </div>
-
-    <div class="row mb-3">
-        <div class="col-md-6">
-            <label class="form-label fw-semibold">Filter by Policy Type</label>
-            <select class="form-select" @onchange="OnFilterChanged">
-                <option value="">All Types</option>
-                <option value="Configuration">Configuration</option>
-                <option value="Compliance">Compliance</option>
-                <option value="Application">Application</option>
-            </select>
-        </div>
-    </div>
-
-    @if (isLoadingAssignments)
-    {
-        <div class="d-flex align-items-center gap-2 my-4">
-            <div class="spinner-border text-primary" role="status"></div>
-            <span>Loading assignments...</span>
-        </div>
-    }
-    else if (filteredAssignments.Any())
-    {
-        <div class="table-responsive">
-            <table class="table table-striped table-hover">
-                <thead class="table-dark">
-                    <tr>
-                        <th>Policy Name</th>
-                        <th>Type</th>
-                        <th>Assignment</th>
-                        <th>Description</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var assignment in filteredAssignments)
+            @if (groups.Any())
+            {
+                <div class="search-results mt-2">
+                    @foreach (var group in groups)
                     {
-                        <tr>
-                            <td>@assignment.PolicyName</td>
-                            <td>
-                                <span class="badge @GetBadgeClass(assignment.PolicyType)">
-                                    @assignment.PolicyType
-                                </span>
-                            </td>
-                            <td>
-                                <span class="badge @(assignment.AssignmentIntent == "Exclude" ? "bg-danger" : "bg-success")">
-                                    @assignment.AssignmentIntent
-                                </span>
-                            </td>
-                            <td><small>@TruncateDescription(assignment.Description)</small></td>
-                        </tr>
+                        <div class="search-result-item" @onclick="() => SelectGroup(group)">
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="group-icon">👥</span>
+                                <div>
+                                    <div class="fw-semibold">@group.DisplayName</div>
+                                    @if (!string.IsNullOrEmpty(group.Description))
+                                    {
+                                        <small class="text-muted">@group.Description</small>
+                                    }
+                                </div>
+                            </div>
+                        </div>
                     }
-                </tbody>
-            </table>
+                </div>
+            }
+            else if (!string.IsNullOrWhiteSpace(searchTerm) && searchTerm.Length >= 3 && !isSearching)
+            {
+                <div class="alert alert-light mt-2">No groups found matching "<strong>@searchTerm</strong>"</div>
+            }
         </div>
-        <p class="text-muted">Total: @filteredAssignments.Count assignment(s)</p>
     }
     else
     {
-        <div class="alert alert-info">
-            No assignments found for this group@(selectedFilter != null ? $" with type '{selectedFilter}'" : "").
+        <div class="selected-group-header mb-4">
+            <div class="d-flex align-items-center justify-content-between">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="group-icon-lg">👥</span>
+                    <div>
+                        <h4 class="mb-0">@selectedGroup.DisplayName</h4>
+                        @if (!string.IsNullOrEmpty(selectedGroup.Description))
+                        {
+                            <small class="text-muted">@selectedGroup.Description</small>
+                        }
+                    </div>
+                </div>
+                <button class="btn btn-outline-secondary btn-sm" @onclick="ClearSelection">
+                    ✕ Change Group
+                </button>
+            </div>
         </div>
+
+        <div class="filter-tabs mb-4">
+            <button class="filter-tab @(selectedFilter == null ? "active" : "")" @onclick="() => SetFilter(null)">
+                🔍 All
+            </button>
+            <button class="filter-tab @(selectedFilter == PolicyType.Configuration ? "active" : "")" @onclick="() => SetFilter(PolicyType.Configuration)">
+                ⚙️ Configuration
+            </button>
+            <button class="filter-tab @(selectedFilter == PolicyType.Compliance ? "active" : "")" @onclick="() => SetFilter(PolicyType.Compliance)">
+                ✅ Compliance
+            </button>
+            <button class="filter-tab @(selectedFilter == PolicyType.Application ? "active" : "")" @onclick="() => SetFilter(PolicyType.Application)">
+                📦 Applications
+            </button>
+        </div>
+
+        @if (isLoadingAssignments)
+        {
+            <div class="loading-state">
+                <div class="spinner-border text-primary"></div>
+                <span>Loading assignments...</span>
+            </div>
+        }
+        else if (filteredAssignments.Any())
+        {
+            <div class="assignments-grid">
+                @foreach (var assignment in filteredAssignments)
+                {
+                    <div class="assignment-card">
+                        <div class="assignment-card-header">
+                            <span class="policy-icon">@GetPolicyIcon(assignment.PolicyType)</span>
+                            <span class="badge @GetBadgeClass(assignment.PolicyType)">@assignment.PolicyType</span>
+                        </div>
+                        <h6 class="assignment-name">@assignment.PolicyName</h6>
+                        @if (!string.IsNullOrEmpty(assignment.Description))
+                        {
+                            <p class="assignment-desc">@TruncateDescription(assignment.Description)</p>
+                        }
+                        <div class="assignment-footer">
+                            <span class="badge @(assignment.AssignmentIntent == "Exclude" ? "bg-danger" : "bg-success")">
+                                @(assignment.AssignmentIntent == "Exclude" ? "⛔" : "✓") @assignment.AssignmentIntent
+                            </span>
+                        </div>
+                    </div>
+                }
+            </div>
+            <p class="text-muted mt-3">Total: @filteredAssignments.Count assignment(s)</p>
+        }
+        else
+        {
+            <div class="empty-state">
+                <span class="empty-icon">📭</span>
+                <p>No assignments found for this group@(selectedFilter != null ? $" with type '{selectedFilter}'" : "").</p>
+            </div>
+        }
     }
-}
+</div>
 
 @code {
     private string searchTerm = string.Empty;
@@ -126,23 +138,38 @@
     private PolicyType? selectedFilter;
     private bool isSearching;
     private bool isLoadingAssignments;
+    private System.Timers.Timer? debounceTimer;
 
-    private async Task HandleKeyDown(KeyboardEventArgs e)
+    private async Task OnSearchInput()
     {
-        if (e.Key == "Enter")
+        debounceTimer?.Stop();
+        debounceTimer?.Dispose();
+
+        if (string.IsNullOrWhiteSpace(searchTerm) || searchTerm.Length < 3)
         {
-            await SearchGroups();
+            groups.Clear();
+            return;
         }
+
+        debounceTimer = new System.Timers.Timer(400);
+        debounceTimer.AutoReset = false;
+        debounceTimer.Elapsed += async (s, e) =>
+        {
+            await InvokeAsync(async () =>
+            {
+                await SearchGroups();
+                StateHasChanged();
+            });
+        };
+        debounceTimer.Start();
     }
 
     private async Task SearchGroups()
     {
-        if (string.IsNullOrWhiteSpace(searchTerm)) return;
+        if (string.IsNullOrWhiteSpace(searchTerm) || searchTerm.Length < 3) return;
 
         isSearching = true;
-        selectedGroup = null;
-        assignments.Clear();
-        filteredAssignments.Clear();
+        StateHasChanged();
 
         try
         {
@@ -157,7 +184,24 @@
     private async Task SelectGroup(GroupInfo group)
     {
         selectedGroup = group;
+        groups.Clear();
+        searchTerm = string.Empty;
         selectedFilter = null;
+        await LoadAssignments();
+    }
+
+    private void ClearSelection()
+    {
+        selectedGroup = null;
+        assignments.Clear();
+        filteredAssignments.Clear();
+        selectedFilter = null;
+        searchTerm = string.Empty;
+    }
+
+    private async Task SetFilter(PolicyType? filter)
+    {
+        selectedFilter = filter;
         await LoadAssignments();
     }
 
@@ -179,12 +223,13 @@
         }
     }
 
-    private async Task OnFilterChanged(ChangeEventArgs e)
+    private static string GetPolicyIcon(PolicyType type) => type switch
     {
-        var value = e.Value?.ToString();
-        selectedFilter = string.IsNullOrEmpty(value) ? null : Enum.Parse<PolicyType>(value);
-        await LoadAssignments();
-    }
+        PolicyType.Configuration => "⚙️",
+        PolicyType.Compliance => "✅",
+        PolicyType.Application => "📦",
+        _ => "📄"
+    };
 
     private static string GetBadgeClass(PolicyType type) => type switch
     {
@@ -196,7 +241,12 @@
 
     private static string TruncateDescription(string description)
     {
-        if (string.IsNullOrEmpty(description)) return "-";
-        return description.Length > 100 ? description[..100] + "..." : description;
+        if (string.IsNullOrEmpty(description)) return "";
+        return description.Length > 120 ? description[..120] + "..." : description;
+    }
+
+    public void Dispose()
+    {
+        debounceTimer?.Dispose();
     }
 }
