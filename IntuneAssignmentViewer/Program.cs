@@ -4,22 +4,16 @@ using Microsoft.Graph;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc.Authorization;
+using Azure.Identity;
 using IntuneAssignmentViewer.Components;
 using IntuneAssignmentViewer.Models;
 using IntuneAssignmentViewer.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure authentication with Microsoft Identity
-var initialScopes = new[] {
-    "https://graph.microsoft.com/.default"
-};
-
+// Authentication: App Registration only for user sign-in + role check
 builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-    .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAd"))
-    .EnableTokenAcquisitionToCallDownstreamApi(initialScopes)
-    .AddMicrosoftGraph(builder.Configuration.GetSection("Graph"))
-    .AddInMemoryTokenCaches();
+    .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAd"));
 
 // Role-based authorization
 var requiredRole = builder.Configuration.GetValue<string>("Authorization:RequiredRole") ?? "IntuneReader";
@@ -35,6 +29,13 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddControllersWithViews()
     .AddMicrosoftIdentityUI();
+
+// Microsoft Graph client using Managed Identity (no app secret needed for Graph calls)
+builder.Services.AddSingleton(sp =>
+{
+    var credential = new DefaultAzureCredential();
+    return new GraphServiceClient(credential, new[] { "https://graph.microsoft.com/.default" });
+});
 
 // Branding configuration
 builder.Services.Configure<BrandingSettings>(builder.Configuration.GetSection("Branding"));
