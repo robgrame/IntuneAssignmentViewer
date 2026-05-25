@@ -1,4 +1,6 @@
 ﻿@page "/"
+@using Microsoft.AspNetCore.Authorization
+@attribute [AllowAnonymous]
 @inject IOptions<BrandingSettings> BrandingOptions
 @inject IConfiguration Configuration
 

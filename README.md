@@ -54,7 +54,46 @@ The Intune portal scatters that information across **a dozen blades**. This tool
 
 ## 📸 Screenshots
 
-> *(Add screenshots of splash page, card view, table view, search-as-you-type here)*
+### 🔐 Splash / Sign-in page
+
+<p align="center">
+  <img src="docs/screenshots/01-splash.png" alt="Splash page" width="900" />
+</p>
+
+### 🏠 Authenticated home
+
+<p align="center">
+  <img src="docs/screenshots/02-home.png" alt="Authenticated home" width="900" />
+</p>
+
+### 🔎 Live group search
+
+<p align="center">
+  <img src="docs/screenshots/03-search.png" alt="Live group search" width="900" />
+</p>
+
+### 📊 Summary dashboard
+
+Once a group is selected, a dashboard appears with totals, a bar chart of assignments by policy type (click a bar to filter), and a donut chart by platform (click the legend to filter by OS).
+
+<p align="center">
+  <img src="docs/screenshots/04-dashboard.png" alt="Summary dashboard" width="900" />
+</p>
+
+### 🎴 Card view & ☰ Table view
+
+<p align="center">
+  <img src="docs/screenshots/05-cards.png" alt="Card view" width="450" />
+  <img src="docs/screenshots/06-table.png" alt="Table view" width="450" />
+</p>
+
+### 🧮 OS filter
+
+<p align="center">
+  <img src="docs/screenshots/07-filters.png" alt="OS filter applied" width="900" />
+</p>
+
+> 💡 To re-capture or contribute screenshots, see [`docs/screenshots/README.md`](docs/screenshots/README.md).
 
 ## 🏛️ Architecture
 

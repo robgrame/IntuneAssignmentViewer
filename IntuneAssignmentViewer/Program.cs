@@ -37,10 +37,10 @@ builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("RequireIntuneRole", policy =>
         policy.RequireRole(requiredRole));
-    // FallbackPolicy only requires authentication - role check is done in pages
-    options.FallbackPolicy = new AuthorizationPolicyBuilder()
-        .RequireAuthenticatedUser()
-        .Build();
+    // No FallbackPolicy: it would force authentication on every endpoint
+    // including static assets (lib/bootstrap, app.css, scoped CSS files),
+    // causing 302 redirects to OIDC for stylesheets. Auth is enforced per page
+    // via [Authorize] / [AllowAnonymous] attributes instead.
 });
 
 builder.Services.AddControllersWithViews()
