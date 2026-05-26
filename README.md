@@ -135,7 +135,7 @@ Recommended setup — uses **system-assigned Managed Identity** for Graph (no se
    az webapp identity assign -g rg-intune-viewer -n <your-app-name>
    ```
 
-2. **Grant Graph permissions to the Managed Identity** — `Group.Read.All`, `DeviceManagementConfiguration.Read.All`, `DeviceManagementApps.Read.All`, `DeviceManagementServiceConfig.Read.All`.
+2. **Grant Graph permissions to the Managed Identity** — `Group.Read.All`, `DeviceManagementConfiguration.Read.All`, `DeviceManagementApps.Read.All`, `DeviceManagementServiceConfig.Read.All`, `DeviceManagementScripts.Read.All`.
 
 3. **Create the sign-in App Registration**, enable **ID token issuance**, add app role `IntuneReader`, and assign it to your admin group.
 

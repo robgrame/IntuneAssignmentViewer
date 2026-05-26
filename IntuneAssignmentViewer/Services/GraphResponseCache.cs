@@ -274,10 +274,16 @@ public sealed class GraphResponseCache : IDisposable
                 }
                 else if (!response.IsSuccessStatusCode)
                 {
-                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound ||
-                        response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
-                        _logger.LogDebug("Graph {Status} (skipped): {Url}", response.StatusCode, url);
+                        _logger.LogDebug("Graph 404 (skipped): {Url}", url);
+                    }
+                    else if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                    {
+                        var body = await response.Content.ReadAsStringAsync(ct);
+                        var hint = ExtractPermissionHint(body);
+                        _logger.LogWarning("Graph 403 on {Url} — missing permission?{Hint}", url,
+                            string.IsNullOrEmpty(hint) ? "" : " " + hint);
                     }
                     else
                     {
@@ -368,6 +374,20 @@ public sealed class GraphResponseCache : IDisposable
         {
             _tokenLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Extracts the "must have one of: X, Y" hint from Graph/Intune 403 bodies so
+    /// admins can see which permission they need to grant.
+    /// </summary>
+    private static string ExtractPermissionHint(string body)
+    {
+        if (string.IsNullOrEmpty(body)) return "";
+        var m = System.Text.RegularExpressions.Regex.Match(body,
+            @"following scopes?:\s*([A-Za-z0-9\.,\s]+?)(?=""|\\)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (m.Success) return $"Required: {m.Groups[1].Value.Trim()}";
+        return "";
     }
 
     public void Dispose()
