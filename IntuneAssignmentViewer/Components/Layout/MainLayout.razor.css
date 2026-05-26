@@ -29,12 +29,14 @@
 
 .nav-links {
     display: flex;
-    gap: 0.25rem;
+    gap: 1rem;
+    margin-left: 1.5rem;
 }
 
-.nav-links .nav-link {
-    color: #ffffff;
-    padding: 0.55rem 1rem;
+.nav-links ::deep .nav-link,
+.nav-links ::deep a.nav-link {
+    color: #ffffff !important;
+    padding: 0.55rem 1.1rem;
     border-radius: 8px;
     font-size: 1rem;
     font-weight: 600;
@@ -42,18 +44,18 @@
     transition: background 0.2s, color 0.2s;
 }
 
-.nav-links .nav-link:hover {
+.nav-links ::deep .nav-link:hover {
     background: rgba(255, 255, 255, 0.18);
-    color: #ffffff;
+    color: #ffffff !important;
 }
 
-.nav-links .nav-link.active {
+.nav-links ::deep .nav-link.active {
     background: rgba(255, 255, 255, 0.28);
-    color: #ffffff;
+    color: #ffffff !important;
 }
 
 .nav-icon {
-    margin-right: 0.45rem;
+    margin-right: 0.5rem;
     font-size: 1.25rem;
     vertical-align: -2px;
 }
