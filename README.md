@@ -154,14 +154,14 @@ Same codebase, runs on Windows Server with IIS.
 
 On-prem there is **no Managed Identity** — so **all Microsoft Graph application permissions must be granted to a dedicated App Registration** (a "Graph app") and the app uses its credentials (secret or certificate) to acquire tokens.
 
-You will therefore need **two App Registrations** (or one combined):
+You will therefore need **two App Registrations**:
 
 | App Registration | Purpose | Permissions |
 |---|---|---|
 | **Sign-in app** (`AzureAd`) | User authentication (OIDC), app role assignment | App role `IntuneReader` for authorized users; ID token issuance enabled |
 | **Graph app** (`Graph`) | Server-to-server Graph API calls | All the Graph **application** permissions listed in [Prerequisites](#prerequisites) — granted with admin consent |
 
-You can use the **same App Registration for both** if you prefer — just set `Graph:ClientId = AzureAd:ClientId` and add Graph application permissions to it.
+> ⚠️ **Production recommendation**: use **two separate App Registrations**. A combined app is supported for labs / small deployments by setting `Graph:ClientId = AzureAd:ClientId`, but it increases blast radius — the same identity is used both for user sign-in and for holding high-privilege Graph application credentials.
 
 ### Deployment steps
 
@@ -174,9 +174,9 @@ You can use the **same App Registration for both** if you prefer — just set `G
 
 ### Graph authentication options (on-prem)
 
-The app accepts client credentials in this priority order (first match wins):
+The app accepts client credentials in this priority order (first match wins). Each loaded certificate is validated at startup — if the private key is not accessible or the cert is expired/not-yet-valid, the app fails fast with a clear error.
 
-#### 🔒 Option A — Certificate from Windows store (recommended, most secure)
+#### 🔒 Option A — Certificate from Windows store (recommended)
 
 ```jsonc
 "Graph": {
@@ -190,6 +190,8 @@ The app accepts client credentials in this priority order (first match wins):
 
 Upload the **public** part of the cert to the App Registration (Certificates & secrets → Certificates). Keep the **private** key in the Windows cert store. Grant the IIS app pool identity read access to the private key (`certlm.msc` → cert → All Tasks → Manage Private Keys).
 
+The thumbprint can be pasted with spaces / colons / leading `0x` — they are normalized away.
+
 #### 🔒 Option B — Certificate from PFX file on disk
 
 ```jsonc
@@ -200,6 +202,8 @@ Upload the **public** part of the cert to the App Registration (Certificates & s
   "CertificatePassword": "<pfx-password>"
 }
 ```
+
+The PFX is loaded with `EphemeralKeySet` — the private key is **not persisted** on the host. The app pool identity needs read access to the `.pfx` file only.
 
 #### 🔒 Option C — Certificate as base64 (for Key Vault / CI secrets)
 
@@ -212,6 +216,8 @@ Upload the **public** part of the cert to the App Registration (Certificates & s
 }
 ```
 
+Same ephemeral key handling. Useful when injecting the certificate from a Key Vault reference or a Kubernetes secret.
+
 #### 🔑 Option D — Client secret (simpler, less secure)
 
 ```jsonc
@@ -222,9 +228,11 @@ Upload the **public** part of the cert to the App Registration (Certificates & s
 }
 ```
 
-> 💡 The included `web.config` configures `AspNetCoreModuleV2` in-process hosting plus security headers.
-> 
-> 💡 Never put secrets in source control. Use `appsettings.Production.json` (gitignored), environment variables, or a secret store on the IIS server.
+> ⚠️ **For production**: do **not** store PFX passwords or client secrets in `appsettings.json` committed to source control. Prefer:
+> - **Environment variables** (e.g. `setx Graph__CertificatePassword "..."` for the app pool identity, or set per-site in IIS Configuration Editor → System.webServer/applicationHost/environmentVariables)
+> - **`appsettings.Production.json`** (gitignored, restricted ACL)
+> - **DPAPI-encrypted** config sections
+> - An **enterprise secret store** with a startup configuration provider
 
 ## ⚙️ Configuration reference
 
