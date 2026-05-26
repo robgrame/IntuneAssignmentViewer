@@ -150,22 +150,81 @@ Recommended setup — uses **system-assigned Managed Identity** for Graph (no se
 
 Same codebase, runs on Windows Server with IIS.
 
+### Important on-prem prerequisites
+
+On-prem there is **no Managed Identity** — so **all Microsoft Graph application permissions must be granted to a dedicated App Registration** (a "Graph app") and the app uses its credentials (secret or certificate) to acquire tokens.
+
+You will therefore need **two App Registrations** (or one combined):
+
+| App Registration | Purpose | Permissions |
+|---|---|---|
+| **Sign-in app** (`AzureAd`) | User authentication (OIDC), app role assignment | App role `IntuneReader` for authorized users; ID token issuance enabled |
+| **Graph app** (`Graph`) | Server-to-server Graph API calls | All the Graph **application** permissions listed in [Prerequisites](#prerequisites) — granted with admin consent |
+
+You can use the **same App Registration for both** if you prefer — just set `Graph:ClientId = AzureAd:ClientId` and add Graph application permissions to it.
+
+### Deployment steps
+
 1. Install the [.NET 10 Hosting Bundle](https://dotnet.microsoft.com/download/dotnet/10.0).
 2. Publish: `dotnet publish -c Release -o C:\inetpub\IntuneAssignmentViewer`
 3. In IIS Manager → **Add Website**, point to that folder, app pool set to **"No Managed Code"**.
 4. Bind **HTTPS** (TLS certificate required — OIDC needs it).
 5. Update the App Registration **Redirect URI** to `https://<your-host>/signin-oidc`.
-6. Configure `appsettings.json` with a **Client Secret** for Graph (Managed Identity isn't available on-prem):
+6. Configure `appsettings.json` with **either** a client secret **or** a certificate (see below).
 
-   ```jsonc
-   "Graph": {
-     "TenantId": "<tenant-id>",
-     "ClientId": "<graph-app-client-id>",
-     "ClientSecret": "<secret>"
-   }
-   ```
+### Graph authentication options (on-prem)
+
+The app accepts client credentials in this priority order (first match wins):
+
+#### 🔒 Option A — Certificate from Windows store (recommended, most secure)
+
+```jsonc
+"Graph": {
+  "TenantId": "<tenant-id>",
+  "ClientId": "<graph-app-client-id>",
+  "CertificateThumbprint": "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+  "CertificateStoreLocation": "LocalMachine",  // CurrentUser | LocalMachine
+  "CertificateStoreName": "My"                  // My | Root | TrustedPeople | …
+}
+```
+
+Upload the **public** part of the cert to the App Registration (Certificates & secrets → Certificates). Keep the **private** key in the Windows cert store. Grant the IIS app pool identity read access to the private key (`certlm.msc` → cert → All Tasks → Manage Private Keys).
+
+#### 🔒 Option B — Certificate from PFX file on disk
+
+```jsonc
+"Graph": {
+  "TenantId": "...",
+  "ClientId": "...",
+  "CertificatePath": "C:\\secure\\graph-app.pfx",
+  "CertificatePassword": "<pfx-password>"
+}
+```
+
+#### 🔒 Option C — Certificate as base64 (for Key Vault / CI secrets)
+
+```jsonc
+"Graph": {
+  "TenantId": "...",
+  "ClientId": "...",
+  "CertificateBase64": "<base64-pfx-content>",
+  "CertificatePassword": "<pfx-password>"
+}
+```
+
+#### 🔑 Option D — Client secret (simpler, less secure)
+
+```jsonc
+"Graph": {
+  "TenantId": "...",
+  "ClientId": "...",
+  "ClientSecret": "<client-secret>"
+}
+```
 
 > 💡 The included `web.config` configures `AspNetCoreModuleV2` in-process hosting plus security headers.
+> 
+> 💡 Never put secrets in source control. Use `appsettings.Production.json` (gitignored), environment variables, or a secret store on the IIS server.
 
 ## ⚙️ Configuration reference
 
@@ -177,10 +236,16 @@ Same codebase, runs on Windows Server with IIS.
     "ClientId": "<sign-in-app-client-id>",
     "CallbackPath": "/signin-oidc"
   },
-  "Graph": {                      // Leave empty -> Managed Identity (Azure)
-    "TenantId": "",               // Set all 3 -> Client Secret (on-prem)
+  "Graph": {                      // ALL fields empty -> Managed Identity (Azure)
+    "TenantId": "",
     "ClientId": "",
-    "ClientSecret": ""
+    "ClientSecret": "",             // Option D: client secret
+    "CertificateThumbprint": "",    // Option A: load from Windows cert store
+    "CertificateStoreLocation": "LocalMachine",
+    "CertificateStoreName": "My",
+    "CertificatePath": "",          // Option B: PFX file path
+    "CertificatePassword": "",
+    "CertificateBase64": ""         // Option C: inline base64 PFX
   },
   "Authorization": {
     "RequiredRole": "IntuneReader"  // App role required to access the portal
@@ -189,7 +254,8 @@ Same codebase, runs on Windows Server with IIS.
     "CatalogTtlMinutes": 10,        // Lists of policies/apps
     "AssignmentsTtlMinutes": 10,    // Per-policy /assignments responses
     "GroupNamesTtlMinutes": 30,     // Resolved Entra ID group display names
-    "NegativeTtlMinutes": 1         // 404/403 responses (prevents hammering)
+    "NegativeTtlMinutes": 1,        // 404/403 responses (prevents hammering)
+    "MaxSizeMegabytes": 64          // Hard cap on cached Graph response bytes
   },
   "Performance": {
     "EnableBatchRequests": true,    // Use Graph $batch to combine up to 20 GETs in 1 HTTP call

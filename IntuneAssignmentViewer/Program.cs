@@ -46,32 +46,59 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddControllersWithViews()
     .AddMicrosoftIdentityUI();
 
-// Microsoft Graph client - supports both Managed Identity (Azure) and Client Secret (on-prem)
+// Microsoft Graph client - supports both Managed Identity (Azure) and Client Secret/Certificate (on-prem)
 builder.Services.AddSingleton<Azure.Core.TokenCredential>(sp =>
 {
     var graphConfig = builder.Configuration.GetSection("Graph");
     var tenantId = graphConfig.GetValue<string>("TenantId") ?? builder.Configuration.GetValue<string>("AzureAd:TenantId");
     var clientId = graphConfig.GetValue<string>("ClientId");
     var clientSecret = graphConfig.GetValue<string>("ClientSecret");
+    var certThumbprint = graphConfig.GetValue<string>("CertificateThumbprint");
+    var certPath = graphConfig.GetValue<string>("CertificatePath");
+    var certPassword = graphConfig.GetValue<string>("CertificatePassword");
+    var certBase64 = graphConfig.GetValue<string>("CertificateBase64");
+    var certStoreLocation = graphConfig.GetValue<string>("CertificateStoreLocation") ?? "LocalMachine";
+    var certStoreName = graphConfig.GetValue<string>("CertificateStoreName") ?? "My";
 
-    // 1) Explicit client credentials always win (on-prem or hybrid scenario)
+    var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("CredentialResolution");
+
+    // 1) Certificate-based credentials (preferred for on-prem: stronger than secrets)
+    if (!string.IsNullOrEmpty(clientId) && !string.IsNullOrEmpty(tenantId)
+        && (!string.IsNullOrEmpty(certThumbprint) || !string.IsNullOrEmpty(certPath) || !string.IsNullOrEmpty(certBase64)))
+    {
+        var cert = IntuneAssignmentViewer.Services.CertificateLoader.Load(
+            certThumbprint, certPath, certPassword, certBase64, certStoreLocation, certStoreName, logger);
+        if (cert == null)
+        {
+            throw new InvalidOperationException(
+                "Graph certificate credentials configured but the certificate could not be loaded. " +
+                "Check thumbprint/path and the appropriate Graph:Certificate* settings.");
+        }
+        logger.LogInformation("Graph credential: ClientCertificateCredential (thumbprint {Thumb})", cert.Thumbprint);
+        return new ClientCertificateCredential(tenantId, clientId, cert);
+    }
+
+    // 2) Client secret (on-prem fallback when no certificate is available)
     if (!string.IsNullOrEmpty(clientId) && !string.IsNullOrEmpty(clientSecret) && !string.IsNullOrEmpty(tenantId))
     {
+        logger.LogInformation("Graph credential: ClientSecretCredential (clientId {Cid})", clientId);
         return new ClientSecretCredential(tenantId, clientId, clientSecret);
     }
 
-    // 2) Development: allow CLI / Visual Studio fallback for local dev convenience
+    // 3) Development: allow CLI / Visual Studio fallback for local dev convenience
     if (builder.Environment.IsDevelopment())
     {
+        logger.LogInformation("Graph credential: ChainedTokenCredential (dev: MI -> AzureCli -> VS)");
         return new ChainedTokenCredential(
             new ManagedIdentityCredential(new ManagedIdentityCredentialOptions()),
             new AzureCliCredential(),
             new VisualStudioCredential());
     }
 
-    // 3) Production (Azure): require Managed Identity. No silent CLI/VS fallback so
+    // 4) Production (Azure): require Managed Identity. No silent CLI/VS fallback so
     //    configuration errors fail loudly instead of accidentally using a developer's
     //    interactive credentials.
+    logger.LogInformation("Graph credential: ManagedIdentityCredential (cloud)");
     return new ManagedIdentityCredential(new ManagedIdentityCredentialOptions());
 });
 
